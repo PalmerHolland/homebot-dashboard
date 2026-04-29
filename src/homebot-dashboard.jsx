@@ -872,7 +872,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 // Toggle USE_MOCK_DATA to false once deployed to Netlify with live functions.
-const USE_MOCK_DATA = false;
+const USE_MOCK_DATA = true;
 const POLL_INTERVAL_MS = 60000;
 
 export default function App() {
@@ -972,19 +972,27 @@ export default function App() {
 
   const filtered = useMemo(() => {
     let list = [...clients];
+
+    // Apply partner filter — selectedPartner (from card click) takes priority over dropdown
+    const activePartnerFilter = selectedPartner || filterPartner;
+    if (activePartnerFilter) {
+      list = list.filter(c => c.partner_id === activePartnerFilter);
+    }
+
+    // Apply pill filter — use optional chaining to avoid crashes on missing metrics
     if (activePill !== "All Clients") {
       const map = {
-        "Ready for Refi": c => c.metrics.refinance_opportunity,
-        "Just Listed": c => c.metrics.just_listed,
-        "Likely to Buy": c => c.metrics.likely_to_buy_score >= 70,
-        "Likely to Sell": c => c.metrics.likely_to_sell_score >= 70,
-        "High Equity": c => c.metrics.equity_percent >= 50,
-        "Highly Engaged": c => c.metrics.highly_engaged,
-        "CMA Requested": c => c.metrics.cma_requested,
+        "Ready for Refi": c => c.metrics?.refinance_opportunity,
+        "Just Listed": c => c.metrics?.just_listed,
+        "Likely to Buy": c => (c.metrics?.likely_to_buy_score || 0) >= 70,
+        "Likely to Sell": c => (c.metrics?.likely_to_sell_score || 0) >= 70,
+        "High Equity": c => (c.metrics?.equity_percent || 0) >= 50,
+        "Highly Engaged": c => c.metrics?.highly_engaged,
+        "CMA Requested": c => c.metrics?.cma_requested,
       };
       if (map[activePill]) list = list.filter(map[activePill]);
     }
-    if (filterPartner) list = list.filter(c => c.partner_id === filterPartner || (USE_MOCK_DATA && c.partner_id === filterPartner));
+    if (filterPartner && !selectedPartner) list = list.filter(c => c.partner_id === filterPartner);
     if (filterOpp) {
       const map2 = { "call_today": c => c.opportunity_score >= 85, "call_week": c => c.opportunity_score >= 70 && c.opportunity_score < 85, "nurture": c => c.opportunity_score >= 50 && c.opportunity_score < 70, "monitor": c => c.opportunity_score < 50 };
       if (map2[filterOpp]) list = list.filter(map2[filterOpp]);
@@ -993,7 +1001,6 @@ export default function App() {
       const q = search.toLowerCase();
       list = list.filter(c => c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.property_address.toLowerCase().includes(q));
     }
-    if (selectedPartner) list = list.filter(c => c.partner_id === selectedPartner);
     list.sort((a, b) => {
       let av, bv;
       if (sortCol === "opportunity_score") { av = a.opportunity_score; bv = b.opportunity_score; }
@@ -1009,19 +1016,24 @@ export default function App() {
 
   const topOpps = useMemo(() => [...clients].sort((a,b) => b.opportunity_score - a.opportunity_score).slice(0,7), [clients]);
   const topPartners = useMemo(() => {
-    // Build partner list from live partnerIndex (when using real data) or PARTNERS mock
+    // Build partner list from live partnerIndex (real data) or PARTNERS mock
     const partnerList = USE_MOCK_DATA
       ? PARTNERS.map(p => ({ id: p.id, name: p.name, brokerage: p.brokerage, photo_uri: null, last_synced: null }))
-      : Object.values(partnerIndex).map(p => ({ id: p.id, name: p.name, brokerage: p.brokerage, photo_uri: p.photo_uri || null, last_synced: p.last_synced }));
+      : Object.values(partnerIndex).map(p => ({ id: p.id, name: p.name, brokerage: p.brokerage || "", photo_uri: p.photo_uri || null, last_synced: p.last_synced || null }));
 
-    return partnerList.map(p => {
-      const pc = clients.filter(c => c.partner_id === p.id);
+    // Also detect partners from client data in case partnerIndex isn't populated yet
+    const partnerIdsFromClients = [...new Set(clients.filter(c => c.partner_id).map(c => c.partner_id))];
+    const allPartnerIds = [...new Set([...partnerList.map(p => p.id), ...partnerIdsFromClients])];
+
+    return allPartnerIds.map(pid => {
+      const existing = partnerList.find(p => p.id === pid) || { id: pid, name: pid.replace(/_/g, ' ').replace(/\w/g, c => c.toUpperCase()), brokerage: "", photo_uri: null, last_synced: null };
+      const pc = clients.filter(c => c.partner_id === pid);
       const sellers = pc.filter(c => (c.metrics?.likely_to_sell_score || 0) >= 70).length;
       const refi = pc.filter(c => c.metrics?.refinance_opportunity).length;
       const engaged = pc.filter(c => c.metrics?.highly_engaged).length;
       const avgOpp = pc.length ? Math.round(pc.reduce((s,c) => s + (c.opportunity_score || 0), 0) / pc.length) : 0;
-      return { ...p, totalClients: pc.length, sellers, refi, engaged, avgOpp };
-    }).sort((a,b) => b.avgOpp - a.avgOpp);
+      return { ...existing, totalClients: pc.length, sellers, refi, engaged, avgOpp };
+    }).filter(p => p.totalClients > 0).sort((a,b) => b.totalClients - a.totalClients);
   }, [clients, partnerIndex]);
 
   const recentActivity = useMemo(() => {
@@ -1420,38 +1432,27 @@ export default function App() {
         { id: "preferences", label: "Preferences", icon: "⚙" },
       ];
 
-      const WEBHOOK_SECRET = "PalmerHollandDashboard!@#"; // must match Netlify env var
+      const WEBHOOK_SECRET = "PalmerHollandDashboard!@#";
+      const HOMEBOT_TOKEN = process.env.REACT_APP_HOMEBOT_TOKEN || "";
+
       const runSync = async (partnerId = null) => {
-        setSyncStatus("loading");
+        setSyncStatus("loading:0/?");
         try {
           if (!USE_MOCK_DATA) {
-            let offset = 0;
-            let totalSynced = 0;
-            let done = false;
-            while (!done) {
-              const body = { offset, ...(partnerId ? { partner_id: partnerId } : {}) };
-              const res = await fetch("/.netlify/functions/sync-clients", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET },
-                body: JSON.stringify(body),
-              });
-              let data = {};
-              try { data = await res.json(); } catch {}
-              if (!res.ok || !data.success) {
-                console.error("Sync failed:", res.status, data);
-                setSyncStatus(`error:${data.error || data.hint || res.status}`);
-                return;
-              }
-              totalSynced += data.synced || 0;
-              setSyncStatus(`loading:${totalSynced}/${data.total || '?'}`);
-              done = data.done;
-              offset = data.next_offset || offset + 50;
-              if (!done) await new Promise(r => setTimeout(r, 300));
-            }
-            setSyncStatus(`success:${totalSynced}`);
-            fetchClients.current();
+            // Call get-clients to refresh display after sync
+            // The actual sync happens via Postman for large datasets
+            // For dashboard refresh — just reload from Netlify Blobs
+            const res = await fetch("/.netlify/functions/get-clients", {
+              headers: { "Cache-Control": "no-cache" },
+            });
+            if (!res.ok) throw new Error(`${res.status}`);
+            const data = await res.json();
+            setClients(data.clients || []);
+            if (data.partners) setPartnerIndex(data.partners);
+            setLastRefreshed(new Date());
+            setSyncStatus(`success:${data.clients?.length || 0}`);
           } else {
-            setTimeout(() => { setSyncStatus("success:42"); }, 1500);
+            setTimeout(() => { setSyncStatus("success:42"); }, 800);
           }
         } catch (err) {
           console.error("Sync error:", err);
@@ -1564,9 +1565,7 @@ Content-Type: application/vnd.api+json
                     <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>Pull all your clients from Homebot API</div>
                   </div>
                   <button className="btn btn-primary btn-sm" onClick={() => runSync()} disabled={syncStatus && syncStatus.startsWith('loading')}>
-                    {syncStatus && syncStatus.startsWith('loading')
-                      ? `⟳ Syncing ${syncStatus.split(':')[1] || ''}...`
-                      : '🔄 Sync Now'}
+                    {syncStatus && syncStatus.startsWith('loading') ? '⟳ Refreshing...' : '🔄 Sync Now'}
                   </button>
                 </div>
                 {syncStatus && syncStatus.startsWith('success') && (
@@ -1581,7 +1580,8 @@ Content-Type: application/vnd.api+json
                   </div>
                 )}
                 <div style={{fontSize:'11px',color:'var(--text3)',padding:'10px',background:'var(--surface2)',borderRadius:'8px',borderLeft:'3px solid var(--accent)'}}>
-                  The dashboard auto-refreshes every {pollInterval} seconds. Use Sync Now for an immediate full pull from Homebot.
+                  <strong style={{color:'var(--text2)'}}>Sync Now</strong> — refreshes your dashboard view from stored data.<br/>
+                  <strong style={{color:'var(--text2)'}}>For new clients:</strong> run the sync-clients Postman call to pull fresh data from Homebot, then click Sync Now to update the display.
                 </div>
 
                 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px',background:'var(--surface2)',borderRadius:'8px'}}>
