@@ -948,16 +948,21 @@ export default function App() {
 
   const showToast = (msg) => { setToast(msg); };
 
-  const pillCounts = useMemo(() => ({
-    "All Clients": clients.length,
-    "Ready for Refi": clients.filter(c => c.metrics.refinance_opportunity).length,
-    "Just Listed": clients.filter(c => c.metrics.just_listed).length,
-    "Likely to Buy": clients.filter(c => c.metrics.likely_to_buy_score >= 70).length,
-    "Likely to Sell": clients.filter(c => c.metrics.likely_to_sell_score >= 70).length,
-    "High Equity": clients.filter(c => c.metrics.equity_percent >= 50).length,
-    "Highly Engaged": clients.filter(c => c.metrics.highly_engaged).length,
-    "CMA Requested": clients.filter(c => c.metrics.cma_requested).length,
-  }), [clients]);
+  const pillCounts = useMemo(() => {
+    const base = selectedPartner
+      ? clients.filter(c => c.partner_id === selectedPartner)
+      : clients;
+    return {
+      "All Clients": base.length,
+      "Ready for Refi": base.filter(c => c.metrics?.refinance_opportunity).length,
+      "Just Listed": base.filter(c => c.metrics?.just_listed).length,
+      "Likely to Buy": base.filter(c => (c.metrics?.likely_to_buy_score || 0) >= 70).length,
+      "Likely to Sell": base.filter(c => (c.metrics?.likely_to_sell_score || 0) >= 70).length,
+      "High Equity": base.filter(c => (c.metrics?.equity_percent || 0) >= 50).length,
+      "Highly Engaged": base.filter(c => c.metrics?.highly_engaged).length,
+      "CMA Requested": base.filter(c => c.metrics?.cma_requested).length,
+    };
+  }, [clients, selectedPartner]);
 
   const pillColors = {
     "All Clients": "#4f8ef7", "Ready for Refi": "#3b82f6", "Just Listed": "#ec4899",
@@ -1065,6 +1070,46 @@ export default function App() {
     return <span className={`score-num ${cls}`}>{score}</span>;
   };
 
+  // Partner insight banner — shown at top of Clients view when filtering by partner
+  const PartnerBanner = selectedPartner ? (() => {
+    const p = topPartners.find(x => x.id === selectedPartner);
+    if (!p) return null;
+    const pc = clients.filter(c => c.partner_id === selectedPartner);
+    const sellers = pc.filter(c => (c.metrics?.likely_to_sell_score || 0) >= 70).length;
+    const refi = pc.filter(c => c.metrics?.refinance_opportunity).length;
+    const cma = pc.filter(c => c.metrics?.cma_requested).length;
+    const engaged = pc.filter(c => c.metrics?.highly_engaged).length;
+    const callToday = pc.filter(c => c.opportunity_score >= 85).length;
+    return (
+      <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'16px 20px',display:'flex',alignItems:'center',gap:'20px',flexWrap:'wrap',flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:'12px',flex:'0 0 auto'}}>
+          <div className="avatar" style={{width:'42px',height:'42px',fontSize:'15px'}}>{p.name.split(' ').map(n=>n[0]).join('')}</div>
+          <div>
+            <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'15px'}}>{p.name}</div>
+            <div style={{fontSize:'11.5px',color:'var(--text3)'}}>{p.brokerage} · {p.totalClients} clients</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:'10px',flex:1,flexWrap:'wrap'}}>
+          {[
+            {label:'Call Today',value:callToday,color:'var(--red)'},
+            {label:'Likely to Sell',value:sellers,color:'var(--orange)'},
+            {label:'Refi Opp',value:refi,color:'var(--accent)'},
+            {label:'CMA Requested',value:cma,color:'var(--yellow)'},
+            {label:'Highly Engaged',value:engaged,color:'var(--purple)'},
+          ].map(s => (
+            <div key={s.label} style={{background:'var(--surface2)',borderRadius:'8px',padding:'8px 14px',textAlign:'center',minWidth:'80px'}}>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'800',fontSize:'20px',color:s.color}}>{s.value}</div>
+              <div style={{fontSize:'10.5px',color:'var(--text3)',marginTop:'1px'}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedPartner(null); setActivePill("All Clients"); }}>
+          ✕ Clear Filter
+        </button>
+      </div>
+    );
+  })() : null;
+
   const renderContent = () => {
     if (activeNav === "Partners") {
       const addPartner = async () => {
@@ -1131,7 +1176,7 @@ export default function App() {
           <div className="partner-grid">
             {topPartners.map(p => (
               <div key={p.id} className={`partner-card ${selectedPartner === p.id ? 'selected' : ''}`}
-                onClick={() => { setSelectedPartner(selectedPartner === p.id ? null : p.id); }}>
+                onClick={() => { setSelectedPartner(p.id); setActiveNav("Clients"); setActivePill("All Clients"); }}>
                 <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'10px'}}>
                   {p.photo_uri
                     ? <img src={p.photo_uri} alt={p.name} style={{width:'38px',height:'38px',borderRadius:'50%',objectFit:'cover'}}/>
@@ -1214,19 +1259,63 @@ export default function App() {
     }
 
     if (activeNav === "Activity Feed") {
+      // Build activity from all clients including partners
+      const allActivity = [];
+      clients.forEach(c => {
+        if (c.events && c.events.length > 0) {
+          c.events.forEach(ev => {
+            allActivity.push({ client: c, event: ev });
+          });
+        }
+      });
+      allActivity.sort((a, b) => new Date(b.event.occurred_at) - new Date(a.event.occurred_at));
+      const displayActivity = allActivity.slice(0, 50);
+
+      const eventIcons = {
+        'cma-request': '📊', 'cma_requested': '📊',
+        'viewed-refi-details': '📉', 'refinance_viewed': '📉',
+        'refi-slider-interaction': '📉',
+        'likely-to-sell': '🏠', 'highly-likely-to-sell': '🏠', 'likely_to_sell': '🏠',
+        'prequal-request': '🔑', 'listings-prequal-request': '🔑',
+        'used-cashout-calculator': '💰', 'high_equity': '💰',
+        'homeowner-direct-message': '💬', 'buyer-direct-message': '💬',
+        'schedule-a-call-cta-click': '📞', 'loan-application-cta-click': '📞',
+        'listing-favorited-event': '❤️', 'viewed-should-you-sell': '🏡',
+        'view': '👁', 'homeowner-digest-email-open': '✉', 'homeowner-digest-email-click': '✉',
+        'viewed_report': '📋', 'opened_email': '✉', 'property_viewed': '🏠', 'equity_update': '📈',
+      };
+
       return (
-        <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'20px',maxWidth:'700px'}}>
-          <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'15px',marginBottom:'16px'}}>Live Activity Feed</div>
-          <div className="activity-feed">
-            {recentActivity.map((a, i) => {
-              const ev = a.event; const cl = a.client;
-              const icon = { viewed_report:'📋', opened_email:'✉', cma_requested:'📊', refinance_viewed:'📉', property_viewed:'🏠', equity_update:'💰' }[ev.event_type] || '⚡';
+        <div style={{display:'flex',flexDirection:'column',gap:'12px',maxWidth:'700px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Activity Feed</div>
+            <div style={{fontSize:'12px',color:'var(--text3)'}}>{displayActivity.length} recent events across all databases</div>
+          </div>
+          <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'4px 0'}}>
+            {displayActivity.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon">⚡</div>
+                <div className="empty-title">No activity yet</div>
+                <div className="empty-desc">Events will appear here as your clients interact with Homebot. This populates automatically via the live webhook.</div>
+              </div>
+            ) : displayActivity.map((a, i) => {
+              const ev = a.event;
+              const cl = a.client;
+              const icon = eventIcons[ev.event_type] || '⚡';
+              const isPartner = !!cl.partner_id;
+              const partnerName = isPartner ? topPartners.find(p => p.id === cl.partner_id)?.name : null;
               return (
-                <div key={i} className="activity-item">
-                  <div className="activity-icon">{icon}</div>
+                <div key={i} className="activity-item" style={{cursor:'pointer'}} onClick={() => setQuickLook(cl)}>
+                  <div className="activity-icon" style={{background: isPartner ? 'rgba(139,92,246,0.15)' : 'var(--surface2)'}}>{icon}</div>
                   <div className="activity-text">
-                    <div className="activity-name">{cl.name}</div>
-                    <div className="activity-desc">{ev.event_type.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())} · {cl.city}, {cl.state}</div>
+                    <div className="activity-name" style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                      {cl.name}
+                      {isPartner && <span className="badge" style={{background:'rgba(139,92,246,0.12)',color:'var(--purple)',fontSize:'9px'}}>{partnerName || cl.partner_id}</span>}
+                    </div>
+                    <div className="activity-desc">
+                      {ev.event_type.replace(/-/g,' ').replace(/_/g,' ').replace(/\w/g,c=>c.toUpperCase())}
+                      {cl.property_address ? ` · ${cl.property_address}` : ''}
+                    </div>
                   </div>
                   <div className="activity-time">{fmt.date(ev.occurred_at)}</div>
                 </div>
@@ -1679,6 +1768,9 @@ Content-Type: application/vnd.api+json
     // Dashboard / Clients view
     return (
       <>
+        {/* Partner Banner */}
+        {PartnerBanner}
+
         <div className="summary-pills">
           {Object.entries(pillCounts).map(([label, count]) => (
             <div key={label} className={`pill ${activePill === label ? 'active' : ''}`} onClick={() => setActivePill(label)}>
