@@ -426,7 +426,7 @@ function QuickLook({ client, partner, onClose, onOutreachLogged }) {
     if (!note.trim()) return;
     setSaving(true);
     try {
-      if (!_DATA) {
+      if (!USE_MOCK_DATA) {
         await fetch("/.netlify/functions/log-outreach", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -612,7 +612,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
         home_value: form.home_value ? parseFloat(form.home_value) : undefined,
       };
 
-      if (_DATA) {
+      if (USE_MOCK_DATA) {
         await new Promise(r => setTimeout(r, 1200));
         setStatus("success");
         setMessage(`${form.first_name} ${form.last_name} has been added to Homebot. They will receive a welcome email shortly.`);
@@ -871,7 +871,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-// Toggle _DATA to false once deployed to Netlify with live functions.
+// Live mode — always false in production
 const USE_MOCK_DATA = false;
 const POLL_INTERVAL_MS = 60000;
 
@@ -1893,7 +1893,7 @@ Content-Type: application/vnd.api+json
                     </div>
                   </td></tr>
                 ) : filtered.map(client => {
-                  const partner = PARTNERS.find(p => p.id === client.partner_id);
+                  const partner = topPartners.find(p => p.id === client.partner_id);
                   return (
                     <tr key={client.id} className={selectedRows.has(client.id)?'selected':''} onClick={() => setQuickLook(client)}>
                       <td onClick={e=>e.stopPropagation()}><input type="checkbox" className="checkbox" checked={selectedRows.has(client.id)} onChange={()=>toggleRow(client.id)}/></td>
@@ -1901,7 +1901,12 @@ Content-Type: application/vnd.api+json
                         <div className="td-name">{client.name}</div>
                         <div className="td-email">{client.email}</div>
                       </td>
-                      <td><div className="td-partner">{partner?.name}</div><div style={{fontSize:'10.5px',color:'var(--text3)'}}>{partner?.brokerage}</div></td>
+                      <td>
+                        <div className="td-partner">
+                          {partner?.name || (client.partner_id ? client.partner_id.replace(/_/g,' ').replace(/\w/g,c=>c.toUpperCase()) : '—')}
+                        </div>
+                        <div style={{fontSize:'10.5px',color:'var(--text3)'}}>{partner?.brokerage || ''}</div>
+                      </td>
                       <td>{renderClientScoreCell(client.metrics.likely_to_sell_score)}</td>
                       <td>{renderClientScoreCell(client.metrics.activity_score)}</td>
                       <td><span style={{fontFamily:'Syne,sans-serif',fontWeight:'700',color:client.metrics.equity_percent>=50?'var(--green)':'var(--text)'}}>{fmt.pct(client.metrics.equity_percent)}</span></td>
@@ -1972,7 +1977,9 @@ Content-Type: application/vnd.api+json
           <div className="topbar">
             <div>
               <span className="topbar-title">
-                {activeNav === "Clients" && selectedPartner ? `${PARTNERS.find(p=>p.id===selectedPartner)?.name}'s Clients` : activeNav}
+                {activeNav === "Clients" && selectedPartner
+                  ? `${topPartners.find(p=>p.id===selectedPartner)?.name || selectedPartner}'s Clients`
+                  : activeNav}
               </span>
               <span className="topbar-subtitle">
                 {activeNav === "Dashboard" ? "· Turn Homebot signals into conversations" : ""}
@@ -1998,7 +2005,7 @@ Content-Type: application/vnd.api+json
         {quickLook && (
           <QuickLook
             client={quickLook}
-            partner={PARTNERS.find(p => p.id === quickLook.partner_id)}
+            partner={topPartners.find(p => p.id === quickLook.partner_id)}
             onClose={() => setQuickLook(null)}
           />
         )}
