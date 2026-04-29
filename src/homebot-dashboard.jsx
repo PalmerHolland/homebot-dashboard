@@ -1014,25 +1014,39 @@ export default function App() {
     return list;
   }, [clients, activePill, filterPartner, filterOpp, search, sortCol, sortDir, selectedPartner]);
 
-  const topOpps = useMemo(() => [...clients].sort((a,b) => b.opportunity_score - a.opportunity_score).slice(0,7), [clients]);
+  // topOpps always uses ALL clients for the dashboard widgets
+  const topOpps = useMemo(() => [...clients].filter(c => c.name && c.name !== "Loading...").sort((a,b) => b.opportunity_score - a.opportunity_score).slice(0,7), [clients]);
   const topPartners = useMemo(() => {
-    // Build partner list from live partnerIndex (real data) or PARTNERS mock
+    // Build partner list ONLY from partnerIndex (real registered partners)
+    // Never auto-detect from client data to avoid tagging your own clients
     const partnerList = USE_MOCK_DATA
       ? PARTNERS.map(p => ({ id: p.id, name: p.name, brokerage: p.brokerage, photo_uri: null, last_synced: null }))
-      : Object.values(partnerIndex).map(p => ({ id: p.id, name: p.name, brokerage: p.brokerage || "", photo_uri: p.photo_uri || null, last_synced: p.last_synced || null }));
+      : Object.values(partnerIndex).map(p => ({ id: p.id, name: p.name || p.id, brokerage: p.brokerage || "", photo_uri: p.photo_uri || null, last_synced: p.last_synced || null }));
 
-    // Also detect partners from client data in case partnerIndex isn't populated yet
-    const partnerIdsFromClients = [...new Set(clients.filter(c => c.partner_id).map(c => c.partner_id))];
-    const allPartnerIds = [...new Set([...partnerList.map(p => p.id), ...partnerIdsFromClients])];
+    // If partnerIndex is empty but we have partner clients, build from unique partner_ids
+    // Only do this when there are actually clients with partner_ids set
+    const partnerIdsInData = [...new Set(clients.filter(c => c.partner_id && c.partner_id !== "null").map(c => c.partner_id))];
+    const registeredIds = partnerList.map(p => p.id);
+    const unregisteredIds = partnerIdsInData.filter(id => !registeredIds.includes(id));
 
-    return allPartnerIds.map(pid => {
-      const existing = partnerList.find(p => p.id === pid) || { id: pid, name: pid.replace(/_/g, ' ').replace(/\w/g, c => c.toUpperCase()), brokerage: "", photo_uri: null, last_synced: null };
-      const pc = clients.filter(c => c.partner_id === pid);
+    const allPartners = [
+      ...partnerList,
+      ...unregisteredIds.map(pid => ({
+        id: pid,
+        name: pid.replace(/_/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        brokerage: "",
+        photo_uri: null,
+        last_synced: null,
+      }))
+    ];
+
+    return allPartners.map(p => {
+      const pc = clients.filter(c => c.partner_id === p.id);
       const sellers = pc.filter(c => (c.metrics?.likely_to_sell_score || 0) >= 70).length;
       const refi = pc.filter(c => c.metrics?.refinance_opportunity).length;
       const engaged = pc.filter(c => c.metrics?.highly_engaged).length;
       const avgOpp = pc.length ? Math.round(pc.reduce((s,c) => s + (c.opportunity_score || 0), 0) / pc.length) : 0;
-      return { ...existing, totalClients: pc.length, sellers, refi, engaged, avgOpp };
+      return { ...p, totalClients: pc.length, sellers, refi, engaged, avgOpp };
     }).filter(p => p.totalClients > 0).sort((a,b) => b.totalClients - a.totalClients);
   }, [clients, partnerIndex]);
 
@@ -1082,8 +1096,8 @@ export default function App() {
     return <span className={`score-num ${cls}`}>{score}</span>;
   };
 
-  // Partner insight banner — shown at top of Clients view when filtering by partner
-  const PartnerBanner = selectedPartner ? (() => {
+  // Partner insight banner — shown only when filtering by a specific partner
+  const PartnerBanner = (selectedPartner && (activeNav === "Clients" || activeNav === "Dashboard")) ? (() => {
     const p = topPartners.find(x => x.id === selectedPartner);
     if (!p) return null;
     const pc = clients.filter(c => c.partner_id === selectedPartner);
@@ -1766,10 +1780,13 @@ Content-Type: application/vnd.api+json
     }
 
     // Dashboard / Clients view
+    // For Dashboard tab — always show all clients view without partner filter
+    const isDashboard = activeNav === "Dashboard";
+
     return (
       <>
-        {/* Partner Banner */}
-        {PartnerBanner}
+        {/* Partner Banner - only in Clients tab when partner selected */}
+        {!isDashboard && PartnerBanner}
 
         <div className="summary-pills">
           {Object.entries(pillCounts).map(([label, count]) => (
@@ -1781,7 +1798,7 @@ Content-Type: application/vnd.api+json
           ))}
         </div>
 
-        {!selectedPartner && (
+        {(!selectedPartner && !filterPartner) && (
           <div className="widgets-row">
             <div className="widget">
               <div className="widget-header">
@@ -1955,7 +1972,16 @@ Content-Type: application/vnd.api+json
           </div>
           <div className="sidebar-nav">
             {navItems.map(item => (
-              <div key={item.label} className={`nav-item ${activeNav===item.label?'active':''}`} onClick={() => setActiveNav(item.label)}>
+              <div key={item.label} className={`nav-item ${activeNav===item.label?'active':''}`}
+                onClick={() => {
+                  setActiveNav(item.label);
+                  // Clear partner filter when navigating away from partner view
+                  if (item.label === "Dashboard" || item.label === "Clients") {
+                    setSelectedPartner(null);
+                    setFilterPartner("");
+                    setActivePill("All Clients");
+                  }
+                }}>
                 <span className="nav-icon">{item.icon}</span>
                 <span>{item.label}</span>
               </div>
@@ -1979,6 +2005,10 @@ Content-Type: application/vnd.api+json
               <span className="topbar-title">
                 {activeNav === "Clients" && selectedPartner
                   ? `${topPartners.find(p=>p.id===selectedPartner)?.name || selectedPartner}'s Clients`
+                  : activeNav === "Clients"
+                  ? filterPartner
+                    ? `${topPartners.find(p=>p.id===filterPartner)?.name || filterPartner}'s Clients`
+                    : "Clients — All Partners"
                   : activeNav}
               </span>
               <span className="topbar-subtitle">
