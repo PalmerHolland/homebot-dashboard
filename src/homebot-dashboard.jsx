@@ -151,15 +151,15 @@ const styles = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body, #root { height: 100%; }
   :root {
-    --bg: #0b0d12;
-    --surface: #111318;
-    --surface2: #181c24;
-    --surface3: #1e2330;
-    --border: rgba(255,255,255,0.07);
-    --border2: rgba(255,255,255,0.12);
-    --text: #e8eaf0;
-    --text2: #8b90a0;
-    --text3: #555c6e;
+    --bg: #13161f;
+    --surface: #1a1e2a;
+    --surface2: #222736;
+    --surface3: #2a3045;
+    --border: rgba(255,255,255,0.09);
+    --border2: rgba(255,255,255,0.16);
+    --text: #eef0f6;
+    --text2: #9da3b4;
+    --text3: #666d82;
     --accent: #4f8ef7;
     --accent2: #6366f1;
     --green: #10b981;
@@ -872,7 +872,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 // Toggle USE_MOCK_DATA to false once deployed to Netlify with live functions.
-const USE_MOCK_DATA = false;
+const USE_MOCK_DATA = true;
 const POLL_INTERVAL_MS = 60000;
 
 export default function App() {
@@ -894,6 +894,8 @@ export default function App() {
   const [marketRate, setMarketRate] = useState("6.75");
   const [pollInterval, setPollInterval] = useState("60");
   const [syncStatus, setSyncStatus] = useState(null);
+  const [enrichStatus, setEnrichStatus] = useState(null); // null | 'loading' | 'success' | 'error'
+  const [enrichProgress, setEnrichProgress] = useState({ enriched: 0, total: 0, remaining: 0 });
   const [partnerSyncStatus, setPartnerSyncStatus] = useState({});
   const [showAddClient, setShowAddClient] = useState(false);
   const [addClientPartnerId, setAddClientPartnerId] = useState(null);
@@ -1469,6 +1471,55 @@ Content-Type: application/vnd.api+json
                 <div style={{fontSize:'11px',color:'var(--text3)',padding:'10px',background:'var(--surface2)',borderRadius:'8px',borderLeft:'3px solid var(--accent)'}}>
                   The dashboard auto-refreshes every {pollInterval} seconds. Use Sync Now for an immediate full pull from Homebot.
                 </div>
+
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px',background:'var(--surface2)',borderRadius:'8px'}}>
+                  <div>
+                    <div style={{fontSize:'13px',fontWeight:'500',color:'var(--text)'}}>Enrich Client Data</div>
+                    <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>Pull home value, equity, rate & loan data for all clients</div>
+                    {enrichProgress.total > 0 && (
+                      <div style={{fontSize:'11px',color:'var(--accent)',marginTop:'4px'}}>
+                        {enrichProgress.enriched} enriched · {enrichProgress.remaining} remaining
+                      </div>
+                    )}
+                  </div>
+                  <button className="btn btn-ghost btn-sm" disabled={enrichStatus==='loading'}
+                    style={{borderColor:'var(--green)',color:'var(--green)'}}
+                    onClick={async () => {
+                      setEnrichStatus('loading');
+                      setEnrichProgress({ enriched: 0, total: 0, remaining: 0 });
+                      let offset = 0;
+                      let totalEnriched = 0;
+                      try {
+                        while (true) {
+                          const res = await fetch('/.netlify/functions/enrich-clients', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'x-webhook-secret': 'PalmerHollandDashboard!@#' },
+                            body: JSON.stringify({ offset, batch_size: 15 }),
+                          });
+                          const data = await res.json();
+                          totalEnriched += data.enriched || 0;
+                          setEnrichProgress({ enriched: totalEnriched, total: data.total || 0, remaining: data.remaining || 0 });
+                          if (data.done) break;
+                          offset = data.next_offset;
+                          await new Promise(r => setTimeout(r, 500));
+                        }
+                        setEnrichStatus('success');
+                        if (!USE_MOCK_DATA) fetchClients.current();
+                      } catch { setEnrichStatus('error'); }
+                    }}>
+                    {enrichStatus==='loading' ? `⟳ Enriching... (${enrichProgress.enriched}/${enrichProgress.total})` : '💎 Enrich Now'}
+                  </button>
+                </div>
+                {enrichStatus==='success' && (
+                  <div style={{fontSize:'12px',color:'var(--green)',padding:'10px',background:'rgba(16,185,129,0.08)',borderRadius:'8px',borderLeft:'3px solid var(--green)'}}>
+                    ✓ Enrichment complete — home value, equity, and loan data updated for all clients
+                  </div>
+                )}
+                {enrichStatus==='error' && (
+                  <div style={{fontSize:'12px',color:'var(--red)',padding:'10px',background:'rgba(239,68,68,0.08)',borderRadius:'8px',borderLeft:'3px solid var(--red)'}}>
+                    ✗ Enrichment failed — check your API token and try again
+                  </div>
+                )}
                 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px',background:'var(--surface2)',borderRadius:'8px'}}>
                   <div>
                     <div style={{fontSize:'13px',fontWeight:'500',color:'var(--text)'}}>Last Refreshed</div>
