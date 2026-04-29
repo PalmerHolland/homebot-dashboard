@@ -872,7 +872,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 // Toggle USE_MOCK_DATA to false once deployed to Netlify with live functions.
-const USE_MOCK_DATA = false;
+const USE_MOCK_DATA = true;
 const POLL_INTERVAL_MS = 60000;
 
 export default function App() {
@@ -1336,18 +1336,38 @@ export default function App() {
         setSyncStatus("loading");
         try {
           if (!USE_MOCK_DATA) {
-            const body = partnerId ? { partner_id: partnerId } : {};
-            const res = await fetch("/.netlify/functions/sync-clients", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET },
-              body: JSON.stringify(body),
-            });
-            const data = await res.json();
-            setSyncStatus(data.success ? `success:${data.synced}` : "error");
+            let offset = 0;
+            let totalSynced = 0;
+            let done = false;
+            while (!done) {
+              const body = { offset, ...(partnerId ? { partner_id: partnerId } : {}) };
+              const res = await fetch("/.netlify/functions/sync-clients", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET },
+                body: JSON.stringify(body),
+              });
+              let data = {};
+              try { data = await res.json(); } catch {}
+              if (!res.ok || !data.success) {
+                console.error("Sync failed:", res.status, data);
+                setSyncStatus(`error:${data.error || data.hint || res.status}`);
+                return;
+              }
+              totalSynced += data.synced || 0;
+              setSyncStatus(`loading:${totalSynced}/${data.total || '?'}`);
+              done = data.done;
+              offset = data.next_offset || offset + 50;
+              if (!done) await new Promise(r => setTimeout(r, 300));
+            }
+            setSyncStatus(`success:${totalSynced}`);
+            fetchClients.current();
           } else {
-            setTimeout(() => setSyncStatus("success:42"), 1500);
+            setTimeout(() => { setSyncStatus("success:42"); }, 1500);
           }
-        } catch { setSyncStatus("error"); }
+        } catch (err) {
+          console.error("Sync error:", err);
+          setSyncStatus(`error:${err.message}`);
+        }
       };
 
       return (
@@ -1454,8 +1474,10 @@ Content-Type: application/vnd.api+json
                     <div style={{fontSize:'13px',fontWeight:'500',color:'var(--text)'}}>Full Database Sync</div>
                     <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>Pull all your clients from Homebot API</div>
                   </div>
-                  <button className="btn btn-primary btn-sm" onClick={() => runSync()} disabled={syncStatus==='loading'}>
-                    {syncStatus==='loading' ? '⟳ Syncing...' : '🔄 Sync Now'}
+                  <button className="btn btn-primary btn-sm" onClick={() => runSync()} disabled={syncStatus && syncStatus.startsWith('loading')}>
+                    {syncStatus && syncStatus.startsWith('loading')
+                      ? `⟳ Syncing ${syncStatus.split(':')[1] || ''}...`
+                      : '🔄 Sync Now'}
                   </button>
                 </div>
                 {syncStatus && syncStatus.startsWith('success') && (
@@ -1463,9 +1485,10 @@ Content-Type: application/vnd.api+json
                     ✓ Sync complete — {syncStatus.split(':')[1]} clients synced
                   </div>
                 )}
-                {syncStatus === 'error' && (
+                {syncStatus && syncStatus.startsWith('error') && (
                   <div style={{fontSize:'12px',color:'var(--red)',padding:'10px',background:'rgba(239,68,68,0.08)',borderRadius:'8px',borderLeft:'3px solid var(--red)'}}>
-                    ✗ Sync failed — check your API token and try again
+                    ✗ Sync failed — {syncStatus.split(':')[1] || 'check your API token and try again'}
+                    <div style={{marginTop:'6px',fontSize:'11px',color:'var(--text3)'}}>Check Netlify → Functions → sync-clients logs for details</div>
                   </div>
                 )}
                 <div style={{fontSize:'11px',color:'var(--text3)',padding:'10px',background:'var(--surface2)',borderRadius:'8px',borderLeft:'3px solid var(--accent)'}}>

@@ -56,8 +56,14 @@ exports.handler = async (event) => {
 
   // Validate secret
   const secret = event.headers["x-webhook-secret"];
-  if (secret !== process.env.WEBHOOK_SECRET) {
-    return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
+  const expectedSecret = process.env.WEBHOOK_SECRET;
+  console.log("Secret check:", {
+    received: secret ? secret.substring(0, 5) + "..." : "MISSING",
+    expected: expectedSecret ? expectedSecret.substring(0, 5) + "..." : "NOT SET",
+    match: secret === expectedSecret,
+  });
+  if (secret !== expectedSecret) {
+    return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized", hint: "WEBHOOK_SECRET mismatch or not set in Netlify env vars" }) };
   }
 
   let body = {};
@@ -103,7 +109,12 @@ exports.handler = async (event) => {
       }
     }
 
-    console.log(`Found ${clients.length} clients to sync`);
+    // Cap at 50 per call to avoid timeout — call again with offset for more
+    const syncOffset = body.offset || 0;
+    const syncLimit = 50;
+    const totalClients = clients.length;
+    clients = clients.slice(syncOffset, syncOffset + syncLimit);
+    console.log(`Syncing batch ${syncOffset}-${syncOffset + clients.length} of ${totalClients} clients`);
 
     const indexKey = partnerId ? `partner_${partnerId}_keys` : "client_keys";
     let existingIndex = [];
@@ -190,7 +201,9 @@ exports.handler = async (event) => {
       await indexStore.setJSON("partner_index", partnerIndex);
     }
 
-    console.log(`Sync complete: ${synced} synced, ${failed} failed`);
+    const remaining = Math.max(totalClients - syncOffset - clients.length, 0);
+    const done = remaining === 0;
+    console.log(`Sync batch complete: ${synced} synced, ${failed} failed, ${remaining} remaining`);
 
     return {
       statusCode: 200,
@@ -199,9 +212,14 @@ exports.handler = async (event) => {
         success: true,
         synced,
         failed,
-        total: clients.length,
+        total: totalClients,
+        remaining,
+        next_offset: syncOffset + syncLimit,
+        done,
         partner_id: partnerId,
-        message: `Successfully synced ${synced} clients${partnerId ? ` for partner ${partnerName}` : ""}`,
+        message: done
+          ? `Successfully synced all ${totalClients} clients`
+          : `Synced ${synced} clients — ${remaining} remaining. Call again with offset: ${syncOffset + syncLimit}`,
       }),
     };
   } catch (err) {

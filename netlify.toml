@@ -16,14 +16,25 @@
   node_bundler = "esbuild"
 
 [functions."homebot-webhook"]
-  # Allow Zapier's IP ranges — no timeout issues on webhook receipt
-  timeout = 10
+  timeout = 26
 
 [functions."get-clients"]
-  timeout = 15
+  timeout = 26
+
+[functions."sync-clients"]
+  timeout = 26
+
+[functions."enrich-clients"]
+  timeout = 26
+
+[functions."add-partner"]
+  timeout = 26
+
+[functions."create-client"]
+  timeout = 26
 
 [functions."log-outreach"]
-  timeout = 10
+  timeout = 26
 
 # ── Redirects ─────────────────────────────────────────────────────────────────
 
