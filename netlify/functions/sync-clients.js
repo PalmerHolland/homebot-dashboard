@@ -20,12 +20,34 @@ function getBlobStore(name) {
 }
 const {
   getClientsBySource,
+  homebotRequest,
   getClientHomes,
   getHomeLoans,
   mergeClientData,
+  normalizeClient,
   computeOpportunityScore,
   deriveTriggers,
 } = require("./lib/homebot-api");
+
+// Fetch ALL clients from Homebot with pagination
+async function getAllClients(apiToken) {
+  const clients = [];
+  let nextUrl = "/clients?page[size]=100";
+  while (nextUrl) {
+    const data = await homebotRequest(nextUrl, {}, apiToken);
+    const batch = Array.isArray(data?.data) ? data.data : [data?.data].filter(Boolean);
+    clients.push(...batch.map(normalizeClient));
+    // Check for next page link
+    const nextLink = data?.links?.next;
+    if (nextLink) {
+      // Extract path from full URL
+      nextUrl = nextLink.replace("https://api.homebotapp.com", "");
+    } else {
+      nextUrl = null;
+    }
+  }
+  return clients;
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
@@ -53,27 +75,32 @@ exports.handler = async (event) => {
 
     console.log(`Starting sync for ${partnerId ? `partner: ${partnerId}` : "own database"}...`);
 
-    // Fetch all clients from Homebot using external entity source filter
-    // Own clients are tagged with "homebot-lo-dashboard"
-    // Partner clients will be tagged with their own source
-    const source = partnerId ? `partner-${partnerId}` : "homebot-lo-dashboard";
+    // Fetch all clients from Homebot
+    // First sync: pull everything directly
+    // Subsequent syncs: can filter by source tag
     let clients = [];
+    const source = partnerId ? `partner-${partnerId}` : "homebot-lo-dashboard";
 
     try {
+      // Try source filter first (works after first sync tags clients)
       clients = await getClientsBySource(source, apiToken);
     } catch (err) {
-      console.warn(`Source filter failed, trying without filter:`, err.message);
-      // If no clients tagged yet, this is first sync — we'll get all clients
-      // via a broader approach. For now return guidance.
-      return {
-        statusCode: 200,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          success: false,
-          message: `No clients found with source "${source}". This may be a first-time sync. Please ensure clients are tagged with external-entity-source="${source}" in Homebot, or use the CSV import feature to bulk-tag existing clients.`,
-          partner_id: partnerId,
-        }),
-      };
+      console.log("Source filter returned nothing — falling back to full pull");
+    }
+
+    // If no tagged clients found, pull all clients directly (first-time sync)
+    if (clients.length === 0) {
+      try {
+        console.log("Pulling all clients directly from Homebot API...");
+        clients = await getAllClients(apiToken);
+        console.log(`Found ${clients.length} clients via direct pull`);
+      } catch (err) {
+        console.error("Failed to fetch clients:", err.message);
+        return {
+          statusCode: 500,
+          body: JSON.stringify({ success: false, error: "Failed to fetch clients from Homebot", detail: err.message }),
+        };
+      }
     }
 
     console.log(`Found ${clients.length} clients to sync`);
