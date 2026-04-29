@@ -113,41 +113,57 @@ exports.handler = async (event) => {
     let failed = 0;
     const newKeys = [];
 
+    // Process clients in batches to avoid timeout
+    // Store client records without home/loan data first (fast)
+    // Home/loan data gets enriched by webhook events over time
     for (const client of clients) {
       const storeKey = partnerId
         ? `partner_${partnerId}_${client.homebot_client_id}`
         : `hb_${client.homebot_client_id}`;
 
       try {
-        // Fetch home and loan data
-        let homeData = null;
-        let loanData = null;
-
-        try {
-          const homes = await getClientHomes(client.homebot_client_id, apiToken);
-          if (homes.length > 0) {
-            homeData = homes[0];
-            const loans = await getHomeLoans(homeData.homebot_home_id, apiToken);
-            loanData = loans.find(l => l.lien_position === "first") || loans[0] || null;
-          }
-        } catch (err) {
-          console.warn(`Could not fetch home/loan for ${client.homebot_client_id}:`, err.message);
-        }
-
-        const merged = mergeClientData(client, homeData, loanData);
         const record = {
-          ...merged,
           id: storeKey,
+          homebot_client_id: client.homebot_client_id,
+          external_client_id: client.homebot_client_id,
           partner_id: partnerId,
+          name: client.name,
+          first_name: client.first_name,
+          last_name: client.last_name,
+          email: client.email,
+          phone: client.phone || "",
+          property_address: "",
+          city: "", state: "", zip: "",
+          lead_source: client.lead_source || "",
+          buyers_access: client.buyers_access || null,
+          metrics: {
+            estimated_value: 0,
+            equity_amount: 0,
+            equity_percent: 0,
+            current_rate: 0,
+            loan_amount: 0,
+            likely_to_sell_score: client.likely_to_sell_score || 0,
+            likely_to_buy_score: 0,
+            activity_score: 0,
+            refinance_opportunity: false,
+            highly_engaged: false,
+            just_listed: false,
+            cma_requested: false,
+            updated_at: new Date().toISOString(),
+          },
+          triggers: client.likely_to_sell_score >= 70 ? ["likely_to_sell"] : [],
+          opportunity_score: Math.round((client.likely_to_sell_score || 0) * 0.35),
+          last_activity: client.updated_at || new Date().toISOString(),
+          last_contacted: null,
+          events: [],
+          created_at: client.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
           last_synced: new Date().toISOString(),
         };
 
         await clientStore.setJSON(storeKey, record);
         newKeys.push(storeKey);
         synced++;
-
-        // Small delay to avoid rate limiting
-        await new Promise(r => setTimeout(r, 100));
       } catch (err) {
         console.error(`Failed to sync client ${client.homebot_client_id}:`, err.message);
         failed++;

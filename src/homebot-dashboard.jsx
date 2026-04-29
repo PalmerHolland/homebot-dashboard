@@ -872,7 +872,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 // Toggle USE_MOCK_DATA to false once deployed to Netlify with live functions.
-const USE_MOCK_DATA = false;
+const USE_MOCK_DATA = true;
 const POLL_INTERVAL_MS = 60000;
 
 export default function App() {
@@ -1165,7 +1165,7 @@ export default function App() {
                             if (!USE_MOCK_DATA) {
                               const res = await fetch('/.netlify/functions/sync-clients', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'x-webhook-secret': '' },
+                                headers: { 'Content-Type': 'application/json', 'x-webhook-secret': 'PalmerHollandDashboard!@#' },
                                 body: JSON.stringify({ partner_id: p.id, partner_name: p.name, partner_brokerage: p.brokerage }),
                               });
                               const data = await res.json();
@@ -1329,6 +1329,7 @@ export default function App() {
         { id: "preferences", label: "Preferences", icon: "⚙" },
       ];
 
+      const WEBHOOK_SECRET = "PalmerHollandDashboard!@#"; // must match Netlify env var
       const runSync = async (partnerId = null) => {
         setSyncStatus("loading");
         try {
@@ -1336,7 +1337,7 @@ export default function App() {
             const body = partnerId ? { partner_id: partnerId } : {};
             const res = await fetch("/.netlify/functions/sync-clients", {
               method: "POST",
-              headers: { "Content-Type": "application/json", "x-webhook-secret": process.env.WEBHOOK_SECRET || "" },
+              headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET },
               body: JSON.stringify(body),
             });
             const data = await res.json();
@@ -1504,7 +1505,7 @@ Content-Type: application/vnd.api+json
                                 if (!USE_MOCK_DATA) {
                                   const res = await fetch('/.netlify/functions/sync-clients', {
                                     method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', 'x-webhook-secret': '' },
+                                    headers: { 'Content-Type': 'application/json', 'x-webhook-secret': 'PalmerHollandDashboard!@#' },
                                     body: JSON.stringify({ partner_id: p.id, partner_name: p.name }),
                                   });
                                   const data = await res.json();
