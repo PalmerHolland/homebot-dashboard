@@ -4,6 +4,16 @@
 
 const { getStore } = require("@netlify/blobs");
 
+// Helper to get a Blobs store with explicit credentials when needed
+function getBlobStore(name) {
+  const siteID = process.env.NETLIFY_SITE_ID;
+  const token = process.env.NETLIFY_AUTH_TOKEN;
+  if (siteID && token) {
+    return getStore({ name, siteID, token });
+  }
+  return getStore(name);
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "GET") {
     return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
@@ -16,9 +26,9 @@ exports.handler = async (event) => {
   };
 
   try {
-    const clientStore = getStore("clients");
-    const eventStore = getStore("client_events");
-    const indexStore = getStore("indexes");
+    const clientStore = getBlobStore("clients");
+    const eventStore = getBlobStore("client_events");
+    const indexStore = getBlobStore("indexes");
 
     // Load own client keys
     let ownKeys = [];

@@ -14,6 +14,16 @@
 // updates that store and triggers a sync.
 
 const { getStore } = require("@netlify/blobs");
+
+// Helper to get a Blobs store with explicit credentials when needed
+function getBlobStore(name) {
+  const siteID = process.env.NETLIFY_SITE_ID;
+  const token = process.env.NETLIFY_AUTH_TOKEN;
+  if (siteID && token) {
+    return getStore({ name, siteID, token });
+  }
+  return getStore(name);
+}
 const { getRealEstateAgentByExternalId } = require("./lib/homebot-api");
 
 exports.handler = async (event) => {
@@ -40,7 +50,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const indexStore = getStore("indexes");
+    const indexStore = getBlobStore("indexes");
 
     // Validate the API token works by fetching their profile
     // Partners should provide their Homebot external ID or we use email lookup

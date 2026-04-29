@@ -8,6 +8,16 @@
 //   PARTNER_TOKENS     — JSON string of {partnerId: apiToken} pairs
 
 const { getStore } = require("@netlify/blobs");
+
+// Helper to get a Blobs store with explicit credentials when needed
+function getBlobStore(name) {
+  const siteID = process.env.NETLIFY_SITE_ID;
+  const token = process.env.NETLIFY_AUTH_TOKEN;
+  if (siteID && token) {
+    return getStore({ name, siteID, token });
+  }
+  return getStore(name);
+}
 const {
   getClientById,
   getClientHomes,
@@ -60,9 +70,9 @@ async function processEvent(webhookEvent, partnerId, apiToken) {
   const { client_id, action, source, properties, created_at, id: eventId } = eventData;
   const storeKey = partnerId ? `partner_${partnerId}_${client_id}` : `hb_${client_id}`;
 
-  const clientStore = getStore("clients");
-  const eventStore = getStore("client_events");
-  const indexStore = getStore("indexes");
+  const clientStore = getBlobStore("clients");
+  const eventStore = getBlobStore("client_events");
+  const indexStore = getBlobStore("indexes");
 
   let record = null;
   try { record = await clientStore.get(storeKey, { type: "json" }); } catch {}

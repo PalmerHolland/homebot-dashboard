@@ -19,6 +19,16 @@
 //   home_value       — optional
 
 const { getStore } = require("@netlify/blobs");
+
+// Helper to get a Blobs store with explicit credentials when needed
+function getBlobStore(name) {
+  const siteID = process.env.NETLIFY_SITE_ID;
+  const token = process.env.NETLIFY_AUTH_TOKEN;
+  if (siteID && token) {
+    return getStore({ name, siteID, token });
+  }
+  return getStore(name);
+}
 const {
   homebotRequest,
   getClientByEmail,
@@ -194,8 +204,8 @@ exports.handler = async (event) => {
 
       clientRecord = { ...merged, id: storeKey, partner_id: partner_id || null };
 
-      const clientStore = getStore("clients");
-      const indexStore = getStore("indexes");
+      const clientStore = getBlobStore("clients");
+      const indexStore = getBlobStore("indexes");
 
       await clientStore.setJSON(storeKey, clientRecord);
 

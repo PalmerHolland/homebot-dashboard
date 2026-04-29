@@ -8,6 +8,16 @@
 // If partner_id + api_token provided — syncs that partner's database.
 
 const { getStore } = require("@netlify/blobs");
+
+// Helper to get a Blobs store with explicit credentials when needed
+function getBlobStore(name) {
+  const siteID = process.env.NETLIFY_SITE_ID;
+  const token = process.env.NETLIFY_AUTH_TOKEN;
+  if (siteID && token) {
+    return getStore({ name, siteID, token });
+  }
+  return getStore(name);
+}
 const {
   getClientsBySource,
   getClientHomes,
@@ -38,8 +48,8 @@ exports.handler = async (event) => {
   const apiToken = body.api_token || process.env.HOMEBOT_API_TOKEN;
 
   try {
-    const clientStore = getStore("clients");
-    const indexStore = getStore("indexes");
+    const clientStore = getBlobStore("clients");
+    const indexStore = getBlobStore("indexes");
 
     console.log(`Starting sync for ${partnerId ? `partner: ${partnerId}` : "own database"}...`);
 
