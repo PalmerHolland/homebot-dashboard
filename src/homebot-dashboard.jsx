@@ -426,7 +426,7 @@ function QuickLook({ client, partner, onClose, onOutreachLogged }) {
     if (!note.trim()) return;
     setSaving(true);
     try {
-      if (!USE_MOCK_DATA) {
+      if (!_DATA) {
         await fetch("/.netlify/functions/log-outreach", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -612,7 +612,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
         home_value: form.home_value ? parseFloat(form.home_value) : undefined,
       };
 
-      if (USE_MOCK_DATA) {
+      if (_DATA) {
         await new Promise(r => setTimeout(r, 1200));
         setStatus("success");
         setMessage(`${form.first_name} ${form.last_name} has been added to Homebot. They will receive a welcome email shortly.`);
@@ -871,8 +871,8 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-// Toggle USE_MOCK_DATA to false once deployed to Netlify with live functions.
-const USE_MOCK_DATA = true;
+// Toggle _DATA to false once deployed to Netlify with live functions.
+const USE_MOCK_DATA = false;
 const POLL_INTERVAL_MS = 60000;
 
 export default function App() {
