@@ -59,20 +59,51 @@ exports.handler = async (event) => {
     let errors = 0;
     const fixLog = [];
 
-    // Fix own clients — remove any partner_id that shouldn't be there
-    for (const key of ownKeys) {
+    // Get ALL keys from ALL indexes
+    const allOwnKeys = new Set(ownKeys);
+    const allPartnerKeys = new Map(); // key -> correctPartnerId
+    for (const [partnerId, keys] of Object.entries(partnerKeyMap)) {
+      for (const k of keys) allPartnerKeys.set(k, partnerId);
+    }
+
+    // Combine all keys to process
+    const allKeys = [...new Set([...allOwnKeys, ...allPartnerKeys.keys()])];
+
+    console.log(`Processing ${allKeys.length} total keys`);
+    console.log(`Own: ${allOwnKeys.size}, Partner: ${allPartnerKeys.size}`);
+
+    for (const key of allKeys) {
       try {
         const client = await clientStore.get(key, { type: "json" });
         if (!client) continue;
 
-        // Own clients stored as hb_* should have partner_id: null
-        const correctPartnerId = null;
+        // Determine correct partner_id based on the STORE KEY pattern
+        // hb_* = your own clients (partner_id should be null)
+        // partner_X_* = partner X's clients (partner_id should be X)
+        let correctPartnerId = null;
+        if (key.startsWith("partner_")) {
+          // Extract partner ID from key: partner_natalee_parker_abc123 -> natalee_parker
+          const parts = key.split("_");
+          // Find which registered partner this key belongs to
+          for (const pid of Object.keys(partnerKeyMap)) {
+            if (key.startsWith(`partner_${pid}_`)) {
+              correctPartnerId = pid;
+              break;
+            }
+          }
+        }
+        // hb_* keys = your own clients = null partner_id
 
         if (client.partner_id !== correctPartnerId) {
-          fixLog.push({ key, old: client.partner_id, new: correctPartnerId, name: client.name });
+          fixLog.push({
+            key,
+            old_partner_id: client.partner_id,
+            new_partner_id: correctPartnerId,
+            name: client.name,
+          });
           if (!dryRun) {
             client.partner_id = correctPartnerId;
-            client.id = key; // ensure id matches store key
+            client.id = key;
             await clientStore.setJSON(key, client);
           }
           fixed++;
@@ -82,30 +113,6 @@ exports.handler = async (event) => {
       } catch (err) {
         errors++;
         console.error(`Error processing ${key}:`, err.message);
-      }
-    }
-
-    // Fix partner clients — ensure they have the correct partner_id
-    for (const [partnerId, keys] of Object.entries(partnerKeyMap)) {
-      for (const key of keys) {
-        try {
-          const client = await clientStore.get(key, { type: "json" });
-          if (!client) continue;
-
-          if (client.partner_id !== partnerId) {
-            fixLog.push({ key, old: client.partner_id, new: partnerId, name: client.name });
-            if (!dryRun) {
-              client.partner_id = partnerId;
-              client.id = key;
-              await clientStore.setJSON(key, client);
-            }
-            fixed++;
-          } else {
-            alreadyCorrect++;
-          }
-        } catch (err) {
-          errors++;
-        }
       }
     }
 
