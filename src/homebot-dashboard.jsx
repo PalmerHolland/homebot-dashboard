@@ -872,7 +872,7 @@ function AddClientDrawer({ partnerId, partnerName, partners, onClose, onSuccess 
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 // Toggle USE_MOCK_DATA to false once deployed to Netlify with live functions.
-const USE_MOCK_DATA = true;
+const USE_MOCK_DATA = false;
 const POLL_INTERVAL_MS = 60000;
 
 export default function App() {
