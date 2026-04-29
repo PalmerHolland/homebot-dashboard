@@ -1,0 +1,51 @@
+# netlify.toml
+# Place this file in the root of your repository.
+
+[build]
+  # Where your dashboard React app lives after build
+  publish = "dist"
+  # Where your Netlify Functions live
+  functions = "netlify/functions"
+  # Build command (adjust if using Vite, CRA, etc.)
+  command = "npm run build"
+
+# ── Function-specific settings ────────────────────────────────────────────────
+
+[functions]
+  # Use Node 20 for all functions
+  node_bundler = "esbuild"
+
+[functions."homebot-webhook"]
+  # Allow Zapier's IP ranges — no timeout issues on webhook receipt
+  timeout = 10
+
+[functions."get-clients"]
+  timeout = 15
+
+[functions."log-outreach"]
+  timeout = 10
+
+# ── Redirects ─────────────────────────────────────────────────────────────────
+
+# Route all non-function requests to the React app (SPA fallback)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  conditions = {Role = ["admin"]}
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ── Environment variable hints (set real values in Netlify dashboard) ─────────
+# Do NOT put real secrets here. This is just documentation.
+#
+# Required environment variables to set in Netlify → Site Settings → Environment:
+#
+#   WEBHOOK_SECRET        = a long random string, must match what you put in Zapier
+#   NETLIFY_BLOBS_TOKEN   = auto-provided by Netlify, no action needed
+#
+# Optional:
+#   NODE_ENV              = production
