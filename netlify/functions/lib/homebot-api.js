@@ -185,6 +185,10 @@ function normalizeHome(raw) {
     zip: a["address-zip"] || "",
     appraised_value: parseFloat(a["appraised-value"]) || 0,
     appraised_date: a["appraised-date"] || null,
+    // Homebot provides outstanding balance directly — use this for equity
+    outstanding_balance: parseFloat(a["outstanding-balance"]) || null,
+    equity_amount: parseFloat(a["equity-amount"]) || null,
+    equity_percent: parseFloat(a["equity-percent"]) || null,
     bedrooms: parseInt(a["bedrooms"]) || 0,
     bathrooms: parseFloat(a["bathrooms"]) || 0,
     finished_sqft: parseInt(a["finished-sqft"]) || 0,
@@ -207,8 +211,16 @@ function normalizeLoan(raw) {
   return {
     homebot_loan_id: raw.id,
     amount: parseFloat(a["amount"]) || 0,
-    rate: parseFloat(a["rate"]) || 0,
-    apr: parseFloat(a["apr"]) || 0,
+    // Homebot returns rate as decimal (0.0611 = 6.11%) — convert to percentage
+    rate: (() => {
+      const r = parseFloat(a["rate"]) || 0;
+      // If rate is less than 1, it's a decimal — multiply by 100
+      return r > 0 && r < 1 ? parseFloat((r * 100).toFixed(3)) : r;
+    })(),
+    apr: (() => {
+      const r = parseFloat(a["apr"]) || 0;
+      return r > 0 && r < 1 ? parseFloat((r * 100).toFixed(3)) : r;
+    })(),
     term_years: parseInt(a["term-years"]) || 30,
     loan_type: a["loan-type"] || "",
     loan_program: a["loan-program"] || "",
@@ -283,13 +295,31 @@ function normalizeLOProfile(raw) {
 // ─── MERGE CLIENT + HOME + LOAN ───────────────────────────────────────────────
 
 function mergeClientData(client, home, loan) {
-  // Estimate outstanding loan balance using simple amortization
-  const estimatedBalance = loan ? estimateOutstandingBalance(loan) : 0;
   const appraisedValue = home?.appraised_value || 0;
-  const equityAmount = appraisedValue - estimatedBalance;
-  const equityPercent = appraisedValue > 0
-    ? Math.round((equityAmount / appraisedValue) * 100)
-    : 0;
+
+  // Use Homebot's equity values when available — they're more accurate
+  // Fall back to our amortization estimate only if Homebot doesn't provide them
+  let equityAmount, equityPercent, estimatedBalance;
+
+  if (home?.equity_amount !== null && home?.equity_amount !== undefined && home?.equity_amount > 0) {
+    // Homebot provides equity directly
+    equityAmount = home.equity_amount;
+    equityPercent = home.equity_percent !== null ? home.equity_percent * 100 : (appraisedValue > 0 ? Math.round((equityAmount / appraisedValue) * 100) : 0);
+    estimatedBalance = home.outstanding_balance || Math.max(appraisedValue - equityAmount, 0);
+  } else if (home?.outstanding_balance !== null && home?.outstanding_balance !== undefined && home?.outstanding_balance > 0) {
+    // Homebot provides outstanding balance
+    estimatedBalance = home.outstanding_balance;
+    equityAmount = Math.max(appraisedValue - estimatedBalance, 0);
+    equityPercent = appraisedValue > 0 ? Math.round((equityAmount / appraisedValue) * 100) : 0;
+  } else {
+    // Fall back to amortization estimate
+    estimatedBalance = loan ? estimateOutstandingBalance(loan) : 0;
+    equityAmount = appraisedValue - estimatedBalance;
+    equityPercent = appraisedValue > 0 ? Math.round((equityAmount / appraisedValue) * 100) : 0;
+  }
+
+  equityAmount = Math.max(equityAmount || 0, 0);
+  equityPercent = Math.max(equityPercent || 0, 0);
 
   // Refi opportunity flags
   const CURRENT_MARKET_RATE = parseFloat(process.env.CURRENT_MARKET_RATE || "6.75");

@@ -44,189 +44,149 @@ exports.handler = async (event) => {
   try { body = JSON.parse(event.body || "{}"); } catch {}
 
   const confirmed = body.confirm === "yes_reset_everything";
-  const partnerOnly = body.partner_only || false; // only reset partner data
+  const mode = body.mode || "reset"; // reset | sync_own | sync_partner
   const partnerId = body.partner_id || null;
+  const offset = body.offset || 0;
+  const limit = 50; // process 50 clients at a time
 
   try {
     const clientStore = getBlobStore("clients");
     const indexStore = getBlobStore("indexes");
 
-    // ── STEP 1: Clear existing data ──────────────────────────────────────
-    if (!partnerOnly) {
-      // Clear own client keys
+    // ── MODE: reset — clear all data ─────────────────────────────────────
+    if (mode === "reset") {
+      if (!confirmed) {
+        return { statusCode: 200, body: JSON.stringify({ success: false, message: "Add confirm: 'yes_reset_everything' to reset" }) };
+      }
+      // Clear own keys
       let ownKeys = [];
       try { ownKeys = await indexStore.get("client_keys", { type: "json" }) || []; } catch {}
-      console.log(`Clearing ${ownKeys.length} own client records...`);
-      if (confirmed) {
-        for (const key of ownKeys) {
-          try { await clientStore.delete(key); } catch {}
-        }
-        await indexStore.setJSON("client_keys", []);
-      }
-    }
+      for (const key of ownKeys) { try { await clientStore.delete(key); } catch {} }
+      await indexStore.setJSON("client_keys", []);
 
-    // Clear partner data if partner_id specified or clearing all
-    const knownPartners = partnerId
-      ? [partnerId]
-      : Object.keys(JSON.parse(process.env.PARTNER_TOKENS || "{}"));
-
-    for (const pid of knownPartners) {
-      let pKeys = [];
-      try { pKeys = await indexStore.get(`partner_${pid}_keys`, { type: "json" }) || []; } catch {}
-      console.log(`Clearing ${pKeys.length} records for partner ${pid}...`);
-      if (confirmed) {
-        for (const key of pKeys) {
-          try { await clientStore.delete(key); } catch {}
-        }
+      // Clear all partner keys
+      const knownPartners = Object.keys(JSON.parse(process.env.PARTNER_TOKENS || "{}"));
+      for (const pid of knownPartners) {
+        let pKeys = [];
+        try { pKeys = await indexStore.get(`partner_${pid}_keys`, { type: "json" }) || []; } catch {}
+        for (const key of pKeys) { try { await clientStore.delete(key); } catch {} }
         await indexStore.setJSON(`partner_${pid}_keys`, []);
       }
-    }
-
-    if (!confirmed) {
       return {
         statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ success: true, message: `Cleared ${ownKeys.length} own records. Now run mode: sync_own then mode: sync_partner` }),
+      };
+    }
+
+    // ── MODE: sync_own — sync your clients in batches of 50 ──────────────
+    if (mode === "sync_own") {
+      const allClients = await fetchAllClients(process.env.HOMEBOT_API_TOKEN);
+      const batch = allClients.slice(offset, offset + limit);
+      let existingKeys = [];
+      try { existingKeys = await indexStore.get("client_keys", { type: "json" }) || []; } catch {}
+
+      for (const client of batch) {
+        const key = `hb_${client.homebot_client_id}`;
+        await clientStore.setJSON(key, {
+          id: key, homebot_client_id: client.homebot_client_id,
+          partner_id: null, name: client.name,
+          first_name: client.first_name, last_name: client.last_name,
+          email: client.email, phone: client.phone || "",
+          property_address: "", city: "", state: "", zip: "",
+          lead_source: client.lead_source || "",
+          metrics: {
+            estimated_value: 0, equity_amount: 0, equity_percent: 0,
+            current_rate: 0, loan_amount: 0,
+            likely_to_sell_score: client.likely_to_sell_score || 0,
+            likely_to_buy_score: 0, activity_score: 0,
+            refinance_opportunity: false, highly_engaged: false,
+            just_listed: false, cma_requested: false,
+            updated_at: new Date().toISOString(),
+          },
+          triggers: client.likely_to_sell_score >= 70 ? ["likely_to_sell"] : [],
+          opportunity_score: Math.round((client.likely_to_sell_score || 0) * 0.35),
+          last_activity: client.updated_at || new Date().toISOString(),
+          last_contacted: null, events: [],
+          created_at: client.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(), last_synced: new Date().toISOString(),
+        });
+        if (!existingKeys.includes(key)) existingKeys.push(key);
+      }
+      await indexStore.setJSON("client_keys", existingKeys);
+      const remaining = Math.max(allClients.length - offset - limit, 0);
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          success: false,
-          message: "DRY RUN — add confirm: 'yes_reset_everything' to actually reset",
+          success: true, synced: batch.length, total: allClients.length,
+          remaining, next_offset: offset + limit, done: remaining === 0,
+          message: remaining === 0 ? `All ${allClients.length} own clients synced cleanly` : `${batch.length} synced, ${remaining} remaining`,
         }),
       };
     }
 
-    // ── STEP 2: Re-sync own clients with correct partner_id: null ────────
-    let ownSynced = 0;
-    if (!partnerOnly) {
-      console.log("Fetching own clients from Homebot...");
-      try {
-        const ownClients = await fetchAllClients(process.env.HOMEBOT_API_TOKEN);
-        console.log(`Got ${ownClients.length} own clients`);
-        const newOwnKeys = [];
-        for (const client of ownClients) {
-          const key = `hb_${client.homebot_client_id}`;
-          const record = {
-            id: key,
-            homebot_client_id: client.homebot_client_id,
-            external_client_id: client.homebot_client_id,
-            partner_id: null, // ← explicitly null for own clients
-            name: client.name,
-            first_name: client.first_name,
-            last_name: client.last_name,
-            email: client.email,
-            phone: client.phone || "",
-            property_address: "",
-            city: "", state: "", zip: "",
-            lead_source: client.lead_source || "",
-            buyers_access: client.buyers_access || null,
-            metrics: {
-              estimated_value: 0, equity_amount: 0, equity_percent: 0,
-              current_rate: 0, loan_amount: 0,
-              likely_to_sell_score: client.likely_to_sell_score || 0,
-              likely_to_buy_score: 0, activity_score: 0,
-              refinance_opportunity: false, highly_engaged: false,
-              just_listed: false, cma_requested: false,
-              updated_at: new Date().toISOString(),
-            },
-            triggers: client.likely_to_sell_score >= 70 ? ["likely_to_sell"] : [],
-            opportunity_score: Math.round((client.likely_to_sell_score || 0) * 0.35),
-            last_activity: client.updated_at || new Date().toISOString(),
-            last_contacted: null,
-            events: [],
-            created_at: client.created_at || new Date().toISOString(),
+    // ── MODE: sync_partner — sync one partner's clients ───────────────────
+    if (mode === "sync_partner") {
+      if (!partnerId) return { statusCode: 400, body: JSON.stringify({ error: "partner_id required" }) };
+      const partnerTokens = JSON.parse(process.env.PARTNER_TOKENS || "{}");
+      const partnerToken = partnerTokens[partnerId];
+      if (!partnerToken) return { statusCode: 400, body: JSON.stringify({ error: `No token for partner ${partnerId}` }) };
+
+      const allClients = await fetchAllClients(partnerToken);
+      const batch = allClients.slice(offset, offset + limit);
+      let existingKeys = [];
+      try { existingKeys = await indexStore.get(`partner_${partnerId}_keys`, { type: "json" }) || []; } catch {}
+
+      for (const client of batch) {
+        const key = `partner_${partnerId}_${client.homebot_client_id}`;
+        await clientStore.setJSON(key, {
+          id: key, homebot_client_id: client.homebot_client_id,
+          partner_id: partnerId, name: client.name,
+          first_name: client.first_name, last_name: client.last_name,
+          email: client.email, phone: client.phone || "",
+          property_address: "", city: "", state: "", zip: "",
+          lead_source: client.lead_source || "",
+          metrics: {
+            estimated_value: 0, equity_amount: 0, equity_percent: 0,
+            current_rate: 0, loan_amount: 0,
+            likely_to_sell_score: client.likely_to_sell_score || 0,
+            likely_to_buy_score: 0, activity_score: 0,
+            refinance_opportunity: false, highly_engaged: false,
+            just_listed: false, cma_requested: false,
             updated_at: new Date().toISOString(),
-            last_synced: new Date().toISOString(),
-          };
-          await clientStore.setJSON(key, record);
-          newOwnKeys.push(key);
-          ownSynced++;
-        }
-        await indexStore.setJSON("client_keys", newOwnKeys);
-        console.log(`Stored ${ownSynced} own clients`);
-      } catch (err) {
-        console.error("Own client sync failed:", err.message);
+          },
+          triggers: client.likely_to_sell_score >= 70 ? ["likely_to_sell"] : [],
+          opportunity_score: Math.round((client.likely_to_sell_score || 0) * 0.35),
+          last_activity: client.updated_at || new Date().toISOString(),
+          last_contacted: null, events: [],
+          created_at: client.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(), last_synced: new Date().toISOString(),
+        });
+        if (!existingKeys.includes(key)) existingKeys.push(key);
       }
+      await indexStore.setJSON(`partner_${partnerId}_keys`, existingKeys);
+
+      // Update partner index
+      let partnerIndex = {};
+      try { partnerIndex = await indexStore.get("partner_index", { type: "json" }) || {}; } catch {}
+      partnerIndex[partnerId] = { id: partnerId, client_count: existingKeys.length, last_synced: new Date().toISOString() };
+      await indexStore.setJSON("partner_index", partnerIndex);
+
+      const remaining = Math.max(allClients.length - offset - limit, 0);
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          success: true, partner_id: partnerId, synced: batch.length,
+          total: allClients.length, remaining, next_offset: offset + limit,
+          done: remaining === 0,
+          message: remaining === 0 ? `All ${allClients.length} partner clients synced` : `${batch.length} synced, ${remaining} remaining`,
+        }),
+      };
     }
 
-    // ── STEP 3: Re-sync partner clients with correct partner_id ──────────
-    const partnerSynced = {};
-    const partnerTokens = JSON.parse(process.env.PARTNER_TOKENS || "{}");
-
-    for (const pid of knownPartners) {
-      const partnerToken = partnerTokens[pid];
-      if (!partnerToken) { console.warn(`No token for partner ${pid}`); continue; }
-
-      console.log(`Fetching clients for partner ${pid}...`);
-      try {
-        const partnerClients = await fetchAllClients(partnerToken);
-        console.log(`Got ${partnerClients.length} clients for ${pid}`);
-        const newPartnerKeys = [];
-
-        for (const client of partnerClients) {
-          const key = `partner_${pid}_${client.homebot_client_id}`;
-          const record = {
-            id: key,
-            homebot_client_id: client.homebot_client_id,
-            external_client_id: client.homebot_client_id,
-            partner_id: pid, // ← explicitly set to partner ID
-            name: client.name,
-            first_name: client.first_name,
-            last_name: client.last_name,
-            email: client.email,
-            phone: client.phone || "",
-            property_address: "",
-            city: "", state: "", zip: "",
-            lead_source: client.lead_source || "",
-            buyers_access: client.buyers_access || null,
-            metrics: {
-              estimated_value: 0, equity_amount: 0, equity_percent: 0,
-              current_rate: 0, loan_amount: 0,
-              likely_to_sell_score: client.likely_to_sell_score || 0,
-              likely_to_buy_score: 0, activity_score: 0,
-              refinance_opportunity: false, highly_engaged: false,
-              just_listed: false, cma_requested: false,
-              updated_at: new Date().toISOString(),
-            },
-            triggers: client.likely_to_sell_score >= 70 ? ["likely_to_sell"] : [],
-            opportunity_score: Math.round((client.likely_to_sell_score || 0) * 0.35),
-            last_activity: client.updated_at || new Date().toISOString(),
-            last_contacted: null,
-            events: [],
-            created_at: client.created_at || new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            last_synced: new Date().toISOString(),
-          };
-          await clientStore.setJSON(key, record);
-          newPartnerKeys.push(key);
-        }
-
-        await indexStore.setJSON(`partner_${pid}_keys`, newPartnerKeys);
-        partnerSynced[pid] = newPartnerKeys.length;
-        console.log(`Stored ${newPartnerKeys.length} clients for partner ${pid}`);
-
-        // Update partner index
-        let partnerIndex = {};
-        try { partnerIndex = await indexStore.get("partner_index", { type: "json" }) || {}; } catch {}
-        partnerIndex[pid] = {
-          ...partnerIndex[pid],
-          id: pid,
-          client_count: newPartnerKeys.length,
-          last_synced: new Date().toISOString(),
-        };
-        await indexStore.setJSON("partner_index", partnerIndex);
-      } catch (err) {
-        console.error(`Partner ${pid} sync failed:`, err.message);
-        partnerSynced[pid] = `error: ${err.message}`;
-      }
-    }
-
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        success: true,
-        own_clients_synced: ownSynced,
-        partner_clients_synced: partnerSynced,
-        message: `Clean reset complete. ${ownSynced} own clients and ${JSON.stringify(partnerSynced)} partner clients stored with correct ownership.`,
-      }),
-    };
+    return { statusCode: 400, body: JSON.stringify({ error: "Unknown mode. Use: reset, sync_own, sync_partner" }) };
   } catch (err) {
     console.error("Reset error:", err);
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };

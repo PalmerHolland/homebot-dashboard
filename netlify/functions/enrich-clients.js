@@ -89,9 +89,16 @@ exports.handler = async (event) => {
           const homes = await getClientHomes(client.homebot_client_id, apiToken);
           if (homes.length > 0) {
             homeData = homes[0];
+            console.log(`Home data for ${client.name}: value=${homeData.appraised_value}, equity_amt=${homeData.equity_amount}, equity_pct=${homeData.equity_percent}, balance=${homeData.outstanding_balance}`);
             try {
               const loans = await getHomeLoans(homeData.homebot_home_id, apiToken);
-              loanData = loans.find(l => l.lien_position === "first") || loans[0] || null;
+              // Pick first-lien purchase loan, not refi
+              loanData = loans.find(l => l.lien_position === "first" && !l.refi)
+                || loans.find(l => l.lien_position === "first")
+                || loans[0] || null;
+              if (loanData) {
+                console.log(`Loan data for ${client.name}: rate=${loanData.rate}, amount=${loanData.amount}, type=${loanData.loan_type}`);
+              }
             } catch {}
           }
         } catch (err) {
@@ -122,38 +129,51 @@ exports.handler = async (event) => {
         const merged = mergeClientData(clientForMerge, homeData, loanData);
 
         // Merge enriched data into existing record, preserving activity signals
+        // Build enriched record — prioritize real Homebot data over stored zeros
+        const enrichedMetrics = {
+          ...client.metrics,
+          // Only update if merged has real values (non-zero)
+          estimated_value: merged.metrics.estimated_value > 0 ? merged.metrics.estimated_value : (client.metrics?.estimated_value || 0),
+          equity_amount: merged.metrics.equity_amount > 0 ? merged.metrics.equity_amount : (client.metrics?.equity_amount || 0),
+          equity_percent: merged.metrics.equity_percent > 0 ? merged.metrics.equity_percent : (client.metrics?.equity_percent || 0),
+          estimated_balance: merged.metrics.estimated_balance > 0 ? merged.metrics.estimated_balance : (client.metrics?.estimated_balance || 0),
+          current_rate: merged.metrics.current_rate > 0 ? merged.metrics.current_rate : (client.metrics?.current_rate || 0),
+          apr: merged.metrics.apr > 0 ? merged.metrics.apr : (client.metrics?.apr || 0),
+          loan_amount: merged.metrics.loan_amount > 0 ? merged.metrics.loan_amount : (client.metrics?.loan_amount || 0),
+          loan_type: merged.metrics.loan_type || client.metrics?.loan_type || "",
+          loan_program: merged.metrics.loan_program || client.metrics?.loan_program || "",
+          finance_type: merged.metrics.finance_type || client.metrics?.finance_type || "",
+          term_years: merged.metrics.term_years > 0 ? merged.metrics.term_years : (client.metrics?.term_years || 30),
+          adjustable: merged.metrics.adjustable,
+          pmi_monthly: merged.metrics.pmi_monthly,
+          total_monthly_payment: merged.metrics.total_monthly_payment > 0 ? merged.metrics.total_monthly_payment : (client.metrics?.total_monthly_payment || 0),
+          refinance_opportunity: merged.metrics.refinance_opportunity,
+          // Preserve activity signals from webhook events
+          highly_engaged: client.metrics?.highly_engaged || false,
+          cma_requested: client.metrics?.cma_requested || false,
+          just_listed: client.metrics?.just_listed || false,
+          likely_to_sell_score: merged.metrics.likely_to_sell_score || client.metrics?.likely_to_sell_score || 0,
+          activity_score: client.metrics?.activity_score || 0,
+          updated_at: new Date().toISOString(),
+        };
+
+        // High equity flag
+        if (enrichedMetrics.equity_percent >= 50) enrichedMetrics.high_equity = true;
+
         const enrichedRecord = {
           ...client,
-          property_address: merged.property_address || client.property_address,
-          zip: merged.zip || client.zip,
-          homebot_home_id: merged.homebot_home_id,
-          homebot_loan_id: merged.homebot_loan_id,
-          bedrooms: merged.bedrooms,
-          bathrooms: merged.bathrooms,
-          finished_sqft: merged.finished_sqft,
-          year_built: merged.year_built,
-          metrics: {
-            ...client.metrics,
-            estimated_value: merged.metrics.estimated_value,
-            equity_amount: merged.metrics.equity_amount,
-            equity_percent: merged.metrics.equity_percent,
-            estimated_balance: merged.metrics.estimated_balance,
-            current_rate: merged.metrics.current_rate,
-            apr: merged.metrics.apr,
-            loan_amount: merged.metrics.loan_amount,
-            loan_type: merged.metrics.loan_type,
-            loan_program: merged.metrics.loan_program,
-            finance_type: merged.metrics.finance_type,
-            term_years: merged.metrics.term_years,
-            adjustable: merged.metrics.adjustable,
-            pmi_monthly: merged.metrics.pmi_monthly,
-            total_monthly_payment: merged.metrics.total_monthly_payment,
-            refinance_opportunity: merged.metrics.refinance_opportunity,
-            updated_at: new Date().toISOString(),
-          },
-          // Add triggers from enriched data, keep existing ones
-          triggers: [...new Set([...client.triggers, ...merged.triggers])],
-          opportunity_score: Math.max(merged.opportunity_score, client.opportunity_score || 0),
+          property_address: merged.property_address || client.property_address || "",
+          zip: merged.zip || client.zip || "",
+          homebot_home_id: merged.homebot_home_id || client.homebot_home_id,
+          homebot_loan_id: merged.homebot_loan_id || client.homebot_loan_id,
+          close_date: client.close_date || merged.close_date || null,
+          bedrooms: merged.bedrooms || client.bedrooms || 0,
+          bathrooms: merged.bathrooms || client.bathrooms || 0,
+          finished_sqft: merged.finished_sqft || client.finished_sqft || 0,
+          year_built: merged.year_built || client.year_built || 0,
+          metrics: enrichedMetrics,
+          triggers: [...new Set([...(client.triggers || []), ...(merged.triggers || [])])],
+          opportunity_score: Math.max(merged.opportunity_score || 0, client.opportunity_score || 0),
           enriched_at: new Date().toISOString(),
         };
 

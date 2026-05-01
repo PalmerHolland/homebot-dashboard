@@ -36,6 +36,11 @@ exports.handler = async (event) => {
       const client = await clientStore.get(store_key, { type: "json" });
       if (client) {
         client.last_contacted = new Date().toISOString();
+        client.last_outreach = {
+          note: body.note || "",
+          logged_at: new Date().toISOString(),
+          type: body.type || "call",
+        };
         await clientStore.setJSON(store_key, client);
       }
     } catch {}

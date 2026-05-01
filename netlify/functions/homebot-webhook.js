@@ -96,7 +96,7 @@ async function processEvent(webhookEvent, partnerId, apiToken) {
   }
 
   const signal = HIGH_VALUE_EVENTS[action] || null;
-  record = applySignal(record, action, source, signal);
+  record = applySignal(record, action, source, signal, eventId);
   await clientStore.setJSON(storeKey, record);
 
   let history = [];
@@ -112,21 +112,70 @@ async function processEvent(webhookEvent, partnerId, apiToken) {
   return { client_id, store_key: storeKey, event: action, opportunity_score: record.opportunity_score };
 }
 
-function applySignal(record, action, source, signal) {
+// Friendly labels for activity feed display
+const EVENT_LABELS = {
+  "view": "Explored the Home Digest",
+  "homeowner-digest-email-open": "Opened Home Digest Email",
+  "homeowner-digest-email-click": "Clicked Home Digest Email",
+  "cma-request": "Requested a CMA",
+  "viewed-refi-details": "Explored Refinance Details",
+  "refi-slider-interaction": "Used Refi Calculator",
+  "used-cashout-calculator": "Used Cash-Out Calculator",
+  "likely-to-sell": "Showing Seller Signals",
+  "highly-likely-to-sell": "Strong Seller Signal",
+  "prequal-request": "Requested Pre-Qualification",
+  "loan-application-cta-click": "Clicked Loan Application",
+  "listing-favorited-event": "Favorited a Listing",
+  "homeowner-direct-message": "Sent a Direct Message",
+  "schedule-a-call-cta-click": "Clicked Schedule a Call",
+  "viewed-should-you-sell": "Explored Should You Sell",
+  "instant-offer-requested": "Requested Instant Offer",
+  "buyer-digest-email-open": "Opened Buyer Digest Email",
+  "listings-prequal-request": "Requested Pre-Qual from Listings",
+  "ai-insight": "Viewed AI Insight",
+};
+
+function applySignal(record, action, source, signal, eventId) {
   const now = new Date().toISOString();
   record.last_activity = now;
   record.updated_at = now;
+
+  // Store event on client record for Activity Feed
+  const eventRecord = {
+    event_id: eventId || `ev_${Date.now()}`,
+    event_type: action,
+    label: EVENT_LABELS[action] || action.replace(/-/g, " ").replace(/\w/g, c => c.toUpperCase()),
+    occurred_at: now,
+    source: source || "homebot",
+  };
+  const existingEvents = record.events || [];
+  const alreadyExists = existingEvents.some(e => e.event_id === eventRecord.event_id);
+  if (!alreadyExists) {
+    record.events = [eventRecord, ...existingEvents].slice(0, 50);
+  }
+
   if (!signal) return record;
 
   const m = record.metrics || {};
   if (signal.trigger === "cma_requested") m.cma_requested = true;
   if (signal.trigger === "refinance_viewed") m.refinance_opportunity = true;
-  if (signal.trigger === "highly_engaged") m.highly_engaged = true;
-  if (signal.trigger === "likely_to_buy") m.likely_to_buy_score = Math.min((m.likely_to_buy_score || 0) + 15, 99);
-  m.activity_score = Math.min((m.activity_score || 0) + signal.activity_points, 100);
+  if (signal.trigger === "highly_engaged") {
+    m.highly_engaged = true;
+    m.activity_score = Math.min((m.activity_score || 0) + signal.activity_points, 100);
+  }
+  if (signal.trigger === "likely_to_buy") {
+    m.likely_to_buy_score = Math.min((m.likely_to_buy_score || 0) + 15, 99);
+    m.just_listed = true; // buyer signal
+  }
+  if (signal.trigger === "likely_to_sell") {
+    m.likely_to_sell_score = Math.min((m.likely_to_sell_score || 0) + 10, 99);
+  }
+  if (!m.activity_score) m.activity_score = 0;
+  m.activity_score = Math.min(m.activity_score + (signal.activity_points || 5), 100);
   m.updated_at = now;
   record.metrics = m;
 
+  if (!record.triggers) record.triggers = [];
   if (!record.triggers.includes(signal.trigger)) record.triggers = [...record.triggers, signal.trigger];
 
   record.opportunity_score = computeOpportunityScore(

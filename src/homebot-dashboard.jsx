@@ -120,27 +120,52 @@ function urgency(score) {
   return { label: "Monitor", color: "#6b7280", bg: "rgba(107,114,128,0.12)" };
 }
 
+// Years owned calculation
+function yearsOwned(closeDate) {
+  if (!closeDate) return null;
+  const diff = (Date.now() - new Date(closeDate)) / (1000 * 60 * 60 * 24 * 365.25);
+  return diff > 0 ? Math.floor(diff) : null;
+}
+
+// Strong refi opportunity: rate > market + 0.75% AND equity > 20%
+function isStrongRefi(client) {
+  const rate = parseFloat(client.metrics?.current_rate || 0);
+  const equity = parseFloat(client.metrics?.equity_percent || 0);
+  const marketRate = parseFloat(typeof window !== 'undefined' ? (localStorage.getItem('hb_market_rate') || '6.75') : '6.75');
+  return rate > 0 && rate > (marketRate + 0.75) && equity >= 20;
+}
+
 function nextAction(client) {
-  const { triggers, metrics } = client;
-  if (triggers.includes("cma_requested")) return "CMA Follow-up";
-  if (triggers.includes("likely_to_sell") && metrics.likely_to_sell_score > 75) return "Seller Conversation";
+  const triggers = client.triggers || [];
+  const metrics = client.metrics || {};
+  if (triggers.includes("cma_requested") || metrics.cma_requested) return "Call Today — CMA Interest";
+  if (isStrongRefi(client)) return "Call Today — Refi Opportunity";
+  if ((triggers.includes("likely_to_sell") || triggers.includes("highly_likely_to_sell")) && (metrics.likely_to_sell_score||0) > 75) return "Call Today — Seller Signal";
+  if ((metrics.equity_percent||0) >= 50 && (triggers.includes("high_equity") || metrics.equity_amount > 0)) return "Call Today — High Equity";
   if (metrics.refinance_opportunity) return "Refinance Review";
-  if (triggers.includes("high_equity")) return "Equity Review";
   if (triggers.includes("likely_to_buy")) return "Buyer Consultation";
   if (triggers.includes("just_listed")) return "Listing Opportunity";
+  if ((metrics.likely_to_sell_score||0) >= 70) return "Seller Conversation";
   return "General Nurture";
 }
 
 function suggestedScript(client) {
+  const yrs = yearsOwned(client.close_date);
+  const firstName = client.first_name || client.name?.split(' ')[0] || 'there';
+  const rateStr = parseFloat(client.metrics?.current_rate||0) > 0 ? parseFloat(client.metrics.current_rate).toFixed(2) + '%' : null;
+  const equityDollar = client.metrics?.equity_amount > 0 ? `$${Math.round(client.metrics.equity_amount/1000)}K` : null;
+  const equityPct = client.metrics?.equity_percent > 0 ? Math.round(client.metrics.equity_percent) + '%' : null;
+  const yrStr = yrs ? ` — you've owned your home for ${yrs} year${yrs !== 1 ? 's' : ''} now` : '';
   const action = nextAction(client);
+
   const scripts = {
-    "CMA Follow-up": `Hi ${client.name.split(" ")[0]}, I noticed you recently requested a market analysis for your home. I'd love to walk you through what I'm seeing in the ${client.city} market — values are moving fast and your equity position looks strong. When's a good time to connect?`,
-    "Seller Conversation": `Hi ${client.name.split(" ")[0]}, I've been watching activity around ${client.property_address} and wanted to reach out. Based on current market trends, your home may have appreciated significantly. Would you be open to a quick conversation about your options?`,
-    "Refinance Review": `Hi ${client.name.split(" ")[0]}, with your current rate at ${client.metrics.current_rate}%, there may be an opportunity to restructure and save on your monthly payment. I'd love to run some numbers with you. Do you have 15 minutes this week?`,
-    "Equity Review": `Hi ${client.name.split(" ")[0]}, your home equity has been growing — you're currently sitting at around ${fmt.pct(client.metrics.equity_percent)}. There are some smart ways to leverage that position. Let's chat when you have a moment.`,
-    "Buyer Consultation": `Hi ${client.name.split(" ")[0]}, I see you've been exploring some properties in the area. The market is competitive right now — I'd love to help you get pre-positioned so you're ready to move fast when the right home comes along.`,
-    "Listing Opportunity": `Hi ${client.name.split(" ")[0]}, I wanted to let you know about some exciting activity in your neighborhood. There are buyers actively looking for homes like yours. Would you be open to a quick conversation about timing and value?`,
-    "General Nurture": `Hi ${client.name.split(" ")[0]}, just wanted to check in and see how things are going with the home. Markets in ${client.city} have been interesting lately — let me know if you ever want a quick update on your property's value.`,
+    "CMA Follow-up": `Hi ${firstName}, this is Palmer Holland${yrStr}. I noticed you recently requested a market analysis through Homebot and wanted to reach out personally. I'd love to walk you through what I'm seeing in your market — values are moving fast and your equity position looks strong. When's a good time to connect?`,
+    "Seller Conversation": `Hi ${firstName}, it's Palmer Holland${yrStr ? yrStr + ' and' : ' —'} I've been watching your Homebot signals and wanted to reach out. Based on current market trends${equityDollar ? ' and your ' + equityDollar + ' equity position' : ''}, it might be worth a conversation about your options. Are you thinking about a move in the next year?`,
+    "Refinance Review": `Hi ${firstName}, this is Palmer Holland. I was reviewing your profile and noticed you're ${rateStr ? 'currently at ' + rateStr : 'at a rate'} — with ${equityPct ? equityPct + ' equity' : 'the equity you've built up'}${yrStr}, there may be a real opportunity to restructure and improve your financial position. Do you have 10-15 minutes this week to run through some numbers?`,
+    "Equity Review": `Hi ${firstName}, Palmer Holland here${yrStr}. Your home equity has been building nicely — you're sitting at ${equityPct || 'a strong position'} right now${equityDollar ? ' (' + equityDollar + ')' : ''}. There are some smart ways to leverage that, whether it's a move-up, cash-out, or just good to know. Worth a quick conversation?`,
+    "Buyer Consultation": `Hi ${firstName}, this is Palmer Holland. I see you've been exploring some properties — the market is competitive right now and I'd love to help you get pre-positioned so you can move fast when the right home comes along. Do you have 15 minutes to chat this week?`,
+    "Listing Opportunity": `Hi ${firstName}, Palmer Holland here. I wanted to reach out about some exciting activity in your neighborhood. There are buyers actively looking right now and${equityDollar ? ' with ' + equityDollar + ' in equity' : ''} your timing could be really strong. Would you be open to a quick conversation?`,
+    "General Nurture": `Hi ${firstName}, this is Palmer Holland — just checking in${yrStr ? yrStr + ',' : ''} and wanted to see how things are going with the home. Markets have been interesting lately. Let me know if you ever want a quick update on your property's value or just want to talk through your options.`,
   };
   return scripts[action] || scripts["General Nurture"];
 }
@@ -417,7 +442,7 @@ function Toast({ msg, onClose }) {
 }
 
 // ─── QUICK LOOK DRAWER ────────────────────────────────────────────────────────
-function QuickLook({ client, partner, onClose, onOutreachLogged }) {
+function QuickLook({ client, partner, onClose, onOutreachLogged, onAttributeTransaction, onDisposition, bombBombApiKey }) {
   const [note, setNote] = useState("");
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -462,6 +487,12 @@ function QuickLook({ client, partner, onClose, onOutreachLogged }) {
       <div className="drawer">
         <div className="drawer-header">
           <button className="drawer-close" onClick={onClose}>×</button>
+          <div style={{position:'absolute',top:'14px',left:'20px'}}>
+            <button className="btn btn-ghost btn-sm" style={{color:'var(--red)',borderColor:'rgba(239,68,68,0.3)',fontSize:'10px',padding:'3px 8px'}}
+              onClick={() => { if (onDisposition) onDisposition(client); }}>
+              ⊘ Disposition
+            </button>
+          </div>
           <div className="drawer-name">{client.name}</div>
           <div className="drawer-addr">📍 {client.property_address}, {client.city}, {client.state}</div>
           <div style={{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}}>
@@ -486,8 +517,26 @@ function QuickLook({ client, partner, onClose, onOutreachLogged }) {
           <div className="drawer-section-title">Contact</div>
           <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
             <div style={{fontSize:'13px',color:'var(--text2)'}}>✉ {client.email}</div>
-            <div style={{fontSize:'13px',color:'var(--text2)'}}>📞 {client.phone}</div>
-            {partner && <div style={{fontSize:'13px',color:'var(--text2)'}}>🤝 {partner.name} · {partner.brokerage}</div>}
+            {client.phone && <div style={{fontSize:'13px',color:'var(--text2)'}}>📞 {client.phone}</div>}
+            {partner && <div style={{fontSize:'13px',color:'var(--purple)'}}>🤝 {partner.name} · {partner.brokerage}</div>}
+            {client.close_date && (
+              <div style={{fontSize:'13px',color:'var(--text2)'}}>
+                🏠 Purchased {new Date(client.close_date).toLocaleDateString('en-US',{month:'short',year:'numeric'})}
+                {yearsOwned(client.close_date) !== null && (
+                  <span style={{color:'var(--text3)',marginLeft:'6px',fontSize:'12px'}}>
+                    · {yearsOwned(client.close_date)} yr{yearsOwned(client.close_date) !== 1 ? 's' : ''} owned
+                  </span>
+                )}
+              </div>
+            )}
+            {isStrongRefi(client) && (
+              <div style={{marginTop:'6px',padding:'8px 10px',background:'rgba(59,130,246,0.08)',borderRadius:'8px',borderLeft:'3px solid var(--accent)'}}>
+                <div style={{fontSize:'11px',fontWeight:'700',color:'var(--accent)'}}>⚡ Strong Refi Candidate</div>
+                <div style={{fontSize:'11px',color:'var(--text2)',marginTop:'2px'}}>
+                  Current rate {parseFloat(client.metrics?.current_rate||0).toFixed(2)}% · {Math.round(client.metrics?.equity_percent||0)}% equity
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -560,14 +609,273 @@ function QuickLook({ client, partner, onClose, onOutreachLogged }) {
           </div>
         </div>
 
+        {/* Transaction History */}
+        {client.transaction_attributed && client.last_transaction && (
+          <div className="drawer-section">
+            <div className="drawer-section-title">Transaction History</div>
+            <div style={{background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.15)',borderRadius:'8px',padding:'12px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px'}}>
+                <span style={{fontSize:'14px'}}>✅</span>
+                <span style={{fontSize:'13px',fontWeight:'600',color:'var(--green)'}}>
+                  {client.last_transaction.type?.charAt(0).toUpperCase() + client.last_transaction.type?.slice(1)} Closed
+                </span>
+                {client.last_transaction.loan_amount && (
+                  <span style={{fontSize:'12px',color:'var(--text3)'}}>
+                    · ${Math.round(client.last_transaction.loan_amount/1000)}K
+                  </span>
+                )}
+              </div>
+              {client.last_transaction.close_date && (
+                <div style={{fontSize:'12px',color:'var(--text3)'}}>
+                  Closed {new Date(client.last_transaction.close_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
+                </div>
+              )}
+              {client.last_transaction.signal && client.last_transaction.signal !== 'general' && (
+                <div style={{fontSize:'11.5px',color:'var(--text2)',marginTop:'4px'}}>
+                  Signal: {client.last_transaction.signal.replace(/_/g,' ')}
+                </div>
+              )}
+              {client.last_transaction.notes && (
+                <div style={{fontSize:'12px',color:'var(--text2)',marginTop:'4px',fontStyle:'italic'}}>
+                  "{client.last_transaction.notes}"
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Last Outreach */}
+        {client.last_outreach && (
+          <div className="drawer-section">
+            <div className="drawer-section-title">Last Outreach</div>
+            <div style={{padding:'10px 12px',background:'var(--surface2)',borderRadius:'8px'}}>
+              <div style={{fontSize:'12px',color:'var(--text3)',marginBottom:'3px'}}>
+                {new Date(client.last_outreach.logged_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'})}
+              </div>
+              {client.last_outreach.note && (
+                <div style={{fontSize:'13px',color:'var(--text2)'}}>{client.last_outreach.note}</div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="drawer-section" style={{borderBottom:'none'}}>
           <div className="drawer-section-title">Add Note / Outreach</div>
           <textarea className="notes-input" placeholder="Log a call, email, or note..." value={note} onChange={e=>setNote(e.target.value)}/>
-          <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
+          <div style={{display:'flex',gap:'8px',marginTop:'8px',flexWrap:'wrap'}}>
             <button className="btn btn-primary btn-sm" style={{flex:1}} onClick={logOutreach} disabled={saving}>{saving ? "Saving..." : "📋 Log Outreach"}</button>
-            <button className="btn btn-ghost btn-sm">🎬 Send Video</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => {
+              if (!bombBombApiKey) {
+                alert('Add your BombBomb API key in Settings → Preferences to enable video sending.');
+                return;
+              }
+              // Open BombBomb compose with client email pre-filled
+              const bbUrl = `https://app.bombbomb.com/app/#record?to=${encodeURIComponent(client.email)}&subject=${encodeURIComponent('A quick video for you, ' + (client.first_name || client.name.split(' ')[0]))}&apikey=${bombBombApiKey}`;
+              window.open(bbUrl, '_blank', 'width=800,height=600');
+            }}>🎬 Send Video</button>
+            <button className="btn btn-ghost btn-sm" style={{color:'var(--green)',borderColor:'var(--green)'}}
+              onClick={() => { if (onAttributeTransaction) onAttributeTransaction(client); }}>
+              ✅ Log Transaction
+            </button>
           </div>
         </div>
+      </div>
+    </>
+  );
+}
+
+// ─── DISPOSITION MODAL ───────────────────────────────────────────────────────
+function DispositionModal({ client, onClose, onSave }) {
+  const [disposition, setDisposition] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const options = [
+    { value: "not_interested", label: "Not Interested", icon: "🚫", color: "var(--red)" },
+    { value: "already_listed", label: "Already Listed", icon: "🏷", color: "var(--orange)" },
+    { value: "has_lender", label: "Has a Lender", icon: "🔒", color: "var(--yellow)" },
+    { value: "not_ready", label: "Not Ready — Nurture Later", icon: "⏰", color: "var(--text3)" },
+    { value: "wrong_contact", label: "Wrong Contact Info", icon: "❌", color: "var(--red)" },
+    { value: "do_not_contact", label: "Do Not Contact", icon: "⛔", color: "var(--red)" },
+    { value: "closed_won", label: "Closed — Won Deal", icon: "✅", color: "var(--green)" },
+    { value: "closed_lost", label: "Closed — Lost Deal", icon: "❎", color: "var(--text3)" },
+  ];
+
+  const save = async () => {
+    if (!disposition) { alert("Select a disposition first"); return; }
+    setSaving(true);
+    try {
+      await fetch("/.netlify/functions/log-outreach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-webhook-secret": "PalmerHollandDashboard!@#" },
+        body: JSON.stringify({
+          store_key: client.id,
+          note: `[${disposition.replace(/_/g,' ').toUpperCase()}] ${note}`,
+          type: "disposition",
+          disposition,
+        }),
+      });
+      if (onSave) onSave({ disposition, note });
+      onClose();
+    } catch { setSaving(false); }
+  };
+
+  return (
+    <>
+      <div className="overlay" onClick={onClose}/>
+      <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:'440px',background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'14px',padding:'24px',zIndex:200,display:'flex',flexDirection:'column',gap:'14px',maxHeight:'80vh',overflowY:'auto'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'16px'}}>Disposition Client</div>
+          <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text3)',fontSize:'20px',cursor:'pointer'}}>×</button>
+        </div>
+
+        <div style={{padding:'10px 12px',background:'var(--surface2)',borderRadius:'8px'}}>
+          <div style={{fontSize:'13px',fontWeight:'600'}}>{client.name}</div>
+          <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>{client.email}</div>
+        </div>
+
+        <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+          {options.map(o => (
+            <div key={o.value}
+              onClick={() => setDisposition(o.value)}
+              style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',borderRadius:'8px',cursor:'pointer',border:`1px solid ${disposition===o.value ? o.color : 'var(--border)'}`,background:disposition===o.value?`${o.color}12`:'var(--surface2)',transition:'all 0.15s'}}>
+              <span style={{fontSize:'16px'}}>{o.icon}</span>
+              <span style={{fontSize:'13px',color:disposition===o.value?o.color:'var(--text)',fontWeight:disposition===o.value?'600':'400'}}>{o.label}</span>
+              {disposition===o.value && <span style={{marginLeft:'auto',color:o.color,fontSize:'14px'}}>✓</span>}
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <div style={{fontSize:'11px',color:'var(--text3)',marginBottom:'4px'}}>Note (optional)</div>
+          <textarea
+            style={{width:'100%',background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'6px',padding:'8px 10px',color:'var(--text)',fontSize:'13px',outline:'none',fontFamily:'DM Sans,sans-serif',height:'70px',resize:'none',boxSizing:'border-box'}}
+            placeholder="Add context..."
+            value={note}
+            onChange={e => setNote(e.target.value)}
+          />
+        </div>
+
+        <button className="btn btn-primary" style={{width:'100%',justifyContent:'center'}} onClick={save} disabled={saving || !disposition}>
+          {saving ? '⟳ Saving...' : 'Save Disposition'}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─── TRANSACTION ATTRIBUTION MODAL ──────────────────────────────────────────
+function TransactionModal({ client, onClose, onSave }) {
+  const [form, setForm] = useState({
+    type: "listing",
+    close_date: new Date().toISOString().split("T")[0],
+    loan_amount: "",
+    notes: "",
+    signal: client?.triggers?.[0] || "general",
+  });
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const save = async () => {
+    setSaving(true);
+    const transaction = {
+      client_id: client.id,
+      client_name: client.name,
+      partner_id: client.partner_id,
+      ...form,
+      attributed_at: new Date().toISOString(),
+    };
+    try {
+      const res = await fetch("/.netlify/functions/log-transaction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-webhook-secret": "PalmerHollandDashboard!@#" },
+        body: JSON.stringify(transaction),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSaved(true);
+        if (onSave) onSave(data.transaction);
+        setTimeout(onClose, 1500);
+      } else {
+        setError("Failed to save — try again");
+      }
+    } catch (err) {
+      setError("Network error — try again");
+    }
+    setSaving(false);
+  };
+
+  const inputStyle = {width:'100%',background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'6px',padding:'8px 10px',color:'var(--text)',fontSize:'13px',outline:'none',fontFamily:'DM Sans,sans-serif'};
+
+  return (
+    <>
+      <div className="overlay" onClick={onClose}/>
+      <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:'440px',background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'14px',padding:'24px',zIndex:200,display:'flex',flexDirection:'column',gap:'14px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'16px'}}>✅ Log Transaction</div>
+          <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text3)',fontSize:'20px',cursor:'pointer'}}>×</button>
+        </div>
+
+        {saved ? (
+          <div style={{padding:'20px',textAlign:'center',color:'var(--green)',fontSize:'14px',fontWeight:'600'}}>
+            ✓ Transaction attributed to {client.name}
+          </div>
+        ) : (
+          <>
+            <div style={{padding:'12px',background:'var(--surface2)',borderRadius:'8px',borderLeft:'3px solid var(--accent)'}}>
+              <div style={{fontSize:'13px',fontWeight:'500'}}>{client.name}</div>
+              <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>
+                Signal: {client.triggers?.join(', ') || 'General monitoring'} · Score: {client.opportunity_score}
+              </div>
+            </div>
+
+            <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+              <div>
+                <div style={{fontSize:'11px',color:'var(--text3)',marginBottom:'4px'}}>Transaction Type</div>
+                <select style={{...inputStyle,background:'var(--surface3)'}} value={form.type} onChange={e=>set('type',e.target.value)}>
+                  <option value="listing">Listing (Seller)</option>
+                  <option value="purchase">Purchase (Buyer)</option>
+                  <option value="refinance">Refinance</option>
+                  <option value="referral">Referral Out</option>
+                </select>
+              </div>
+              <div>
+                <div style={{fontSize:'11px',color:'var(--text3)',marginBottom:'4px'}}>Close Date</div>
+                <input style={inputStyle} type="date" value={form.close_date} onChange={e=>set('close_date',e.target.value)}/>
+              </div>
+              <div>
+                <div style={{fontSize:'11px',color:'var(--text3)',marginBottom:'4px'}}>Loan / Sale Amount</div>
+                <input style={inputStyle} placeholder="e.g. 450000" value={form.loan_amount} onChange={e=>set('loan_amount',e.target.value)}/>
+              </div>
+              <div>
+                <div style={{fontSize:'11px',color:'var(--text3)',marginBottom:'4px'}}>Homebot Signal That Started the Conversation</div>
+                <select style={{...inputStyle,background:'var(--surface3)'}} value={form.signal} onChange={e=>set('signal',e.target.value)}>
+                  <option value="likely_to_sell">Likely to Sell</option>
+                  <option value="cma_requested">CMA Requested</option>
+                  <option value="refinance_viewed">Viewed Refi Details</option>
+                  <option value="high_equity">High Equity Alert</option>
+                  <option value="highly_engaged">Highly Engaged</option>
+                  <option value="schedule_call">Clicked Schedule a Call</option>
+                  <option value="general">General Monitoring</option>
+                </select>
+              </div>
+              <div>
+                <div style={{fontSize:'11px',color:'var(--text3)',marginBottom:'4px'}}>Notes</div>
+                <textarea style={{...inputStyle,height:'70px',resize:'none'}} placeholder="How did this lead develop..." value={form.notes} onChange={e=>set('notes',e.target.value)}/>
+              </div>
+            </div>
+
+            {error && <div style={{fontSize:'12px',color:'var(--red)',padding:'8px',background:'rgba(239,68,68,0.08)',borderRadius:'6px'}}>{error}</div>}
+            <button className="btn btn-primary" style={{width:'100%',justifyContent:'center'}} onClick={save} disabled={saving}>
+              {saving ? '⟳ Saving...' : '✅ Save Transaction'}
+            </button>
+            <div style={{fontSize:'11px',color:'var(--text3)',textAlign:'center'}}>
+              Saved to your dashboard — visible in Report Card and client profile
+            </div>
+          </>
+        )}
       </div>
     </>
   );
@@ -896,8 +1204,18 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [enrichStatus, setEnrichStatus] = useState(null); // null | 'loading' | 'success' | 'error'
   const [enrichProgress, setEnrichProgress] = useState({ enriched: 0, total: 0, remaining: 0 });
+  const [transactions, setTransactions] = useState([]);
   const [partnerSyncStatus, setPartnerSyncStatus] = useState({});
   const [showAddClient, setShowAddClient] = useState(false);
+  const [showAttributeModal, setShowAttributeModal] = useState(false);
+  const [showDispositionModal, setShowDispositionModal] = useState(false);
+  const [dispositionClient, setDispositionClient] = useState(null);
+  const [bombBombApiKey, setBombBombApiKey] = useState(() => {
+    try { return localStorage.getItem('hb_bombbomb_key') || ''; } catch { return ''; }
+  });
+  const [attributeClient, setAttributeClient] = useState(null);
+  const [attributeForm, setAttributeForm] = useState({ type: "listing", close_date: "", loan_amount: "", notes: "", signal: "" });
+  const [attributeSaved, setAttributeSaved] = useState(false);
   const [addClientPartnerId, setAddClientPartnerId] = useState(null);
   const [addClientForm, setAddClientForm] = useState({
     first_name: "", last_name: "", email: "", mobile: "",
@@ -944,6 +1262,15 @@ export default function App() {
     fetchClients.current();
     const interval = setInterval(fetchClients.current, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
+  }, []);
+
+  // Load transactions on mount
+  useEffect(() => {
+    if (USE_MOCK_DATA) return;
+    fetch("/.netlify/functions/get-transactions")
+      .then(r => r.json())
+      .then(d => { if (d.transactions) setTransactions(d.transactions); })
+      .catch(() => {});
   }, []);
 
   const showToast = (msg) => { setToast(msg); };
@@ -1084,10 +1411,12 @@ export default function App() {
   // Sidebar nav — Co-Sponsor removed, merged into Partners
   const navItems = [
     { icon: "⬛", label: "Dashboard" },
+    { icon: "📞", label: "Today's Calls" },
     { icon: "👤", label: "Clients" },
     { icon: "🤝", label: "Partners" },
     { icon: "⚡", label: "Activity Feed" },
     { icon: "📊", label: "Reports" },
+    { icon: "🏆", label: "Report Card" },
     { icon: "⚙", label: "Settings" },
   ];
 
@@ -1284,7 +1613,358 @@ export default function App() {
       );
     }
 
-    if (activeNav === "Activity Feed") {
+    if (activeNav === "Today's Calls") {
+      // Top priority clients across ALL databases sorted by opportunity score
+      const allPriority = [...clients]
+        .filter(c => c.name && c.name !== "Loading...")
+        .sort((a,b) => b.opportunity_score - a.opportunity_score)
+        .slice(0, 20);
+
+      const callToday = allPriority.filter(c => c.opportunity_score >= 85);
+      const callWeek = allPriority.filter(c => c.opportunity_score >= 70 && c.opportunity_score < 85);
+
+      const ClientCallCard = ({ c, rank }) => {
+        const u = urgency(c.opportunity_score);
+        const partner = topPartners.find(p => p.id === c.partner_id);
+        const script = suggestedScript(c);
+        const action = nextAction(c);
+        const yrs = yearsOwned(c.close_date);
+        return (
+          <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'16px 20px',display:'flex',flexDirection:'column',gap:'12px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'12px'}}>
+              <div style={{width:'28px',height:'28px',borderRadius:'50%',background:'var(--surface2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'700',color:'var(--text3)',flexShrink:0}}>#{rank}</div>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
+                  <span style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'15px'}}>{c.name}</span>
+                  <span style={{fontSize:'11px',padding:'2px 8px',borderRadius:'10px',background:u.bg,color:u.color,fontWeight:'600'}}>{u.label}</span>
+                  {partner && <span style={{fontSize:'11px',color:'var(--purple)'}}>· {partner.name}</span>}
+                </div>
+                <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>
+                  {c.property_address || c.email}
+                  {yrs !== null && <span style={{marginLeft:'8px'}}>· {yrs}yr owner</span>}
+                  {c.metrics?.current_rate > 0 && <span style={{marginLeft:'8px'}}>· {parseFloat(c.metrics.current_rate).toFixed(2)}%</span>}
+                  {c.metrics?.equity_percent > 0 && <span style={{marginLeft:'8px'}}>· {Math.round(c.metrics.equity_percent)}% equity</span>}
+                </div>
+              </div>
+              <div style={{textAlign:'right',flexShrink:0}}>
+                <ScoreRing score={c.opportunity_score} size={40}/>
+              </div>
+            </div>
+
+            {/* Triggers */}
+            {c.triggers?.length > 0 && (
+              <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                {c.triggers.map(t => {
+                  const tt = TRIGGER_TYPES[t];
+                  return tt ? (
+                    <span key={t} style={{fontSize:'11px',padding:'2px 8px',borderRadius:'10px',background:`${tt.color}18`,color:tt.color,fontWeight:'500'}}>
+                      {tt.icon} {tt.label}
+                    </span>
+                  ) : null;
+                })}
+                {isStrongRefi(c) && (
+                  <span style={{fontSize:'11px',padding:'2px 8px',borderRadius:'10px',background:'rgba(59,130,246,0.12)',color:'var(--accent)',fontWeight:'500'}}>⚡ Strong Refi</span>
+                )}
+              </div>
+            )}
+
+            {/* Suggested script */}
+            <div style={{background:'var(--surface2)',borderRadius:'8px',padding:'10px 12px',borderLeft:'3px solid var(--accent)'}}>
+              <div style={{fontSize:'10px',color:'var(--text3)',marginBottom:'4px',letterSpacing:'1px',textTransform:'uppercase'}}>Suggested Script</div>
+              <div style={{fontSize:'12.5px',color:'var(--text2)',lineHeight:'1.5'}}>{script}</div>
+            </div>
+
+            {/* Action buttons */}
+            <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+              <button className="btn btn-primary btn-sm" onClick={() => setQuickLook(c)}>📋 Full Profile</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => {
+                navigator.clipboard?.writeText(script);
+                alert('Script copied!');
+              }}>📋 Copy Script</button>
+              <button className="btn btn-ghost btn-sm" style={{color:'var(--green)',borderColor:'var(--green)'}}
+                onClick={() => { setAttributeClient(c); setAttributeForm(f => ({...f, signal: c.triggers?.[0] || 'general'})); setShowAttributeModal(true); }}>
+                ✓ Log Transaction
+              </button>
+            </div>
+          </div>
+        );
+      };
+
+      return (
+        <div style={{display:'flex',flexDirection:'column',gap:'16px',maxWidth:'700px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Today's Priority Calls</div>
+            <div style={{fontSize:'12px',color:'var(--text3)'}}>Across all {clients.length} clients</div>
+          </div>
+
+          {callToday.length > 0 && (
+            <div>
+              <div style={{fontSize:'11px',color:'var(--red)',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase',marginBottom:'8px'}}>🔴 Call Today ({callToday.length})</div>
+              <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+                {callToday.slice(0,5).map((c,i) => <ClientCallCard key={c.id} c={c} rank={i+1}/>)}
+              </div>
+            </div>
+          )}
+
+          {callWeek.length > 0 && (
+            <div style={{marginTop:'8px'}}>
+              <div style={{fontSize:'11px',color:'var(--orange)',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase',marginBottom:'8px'}}>🟠 Call This Week ({callWeek.length})</div>
+              <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+                {callWeek.slice(0,5).map((c,i) => <ClientCallCard key={c.id} c={c} rank={callToday.length+i+1}/>)}
+              </div>
+            </div>
+          )}
+
+          {callToday.length === 0 && callWeek.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-icon">📞</div>
+              <div className="empty-title">No priority calls right now</div>
+              <div className="empty-desc">Clients will appear here as they interact with Homebot and raise their hand.</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (activeNav === "Report Card") {
+      // Monthly summary per partner — the story you tell at quarterly meetings
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastMonthStart = new Date(now.getFullYear(), now.getMonth()-1, 1);
+
+      const getMonthStats = (partnerIdFilter) => {
+        const base = partnerIdFilter ? clients.filter(c => c.partner_id === partnerIdFilter) : clients.filter(c => !c.partner_id);
+        const contacted = base.filter(c => c.last_contacted && new Date(c.last_contacted) >= monthStart);
+        const signals = base.filter(c => c.triggers?.length > 0);
+        const sellers = base.filter(c => (c.metrics?.likely_to_sell_score||0) >= 70);
+        const refi = base.filter(c => c.metrics?.refinance_opportunity);
+        const cma = base.filter(c => c.metrics?.cma_requested);
+        const highEquity = base.filter(c => (c.metrics?.equity_percent||0) >= 50);
+        const transactions = base.filter(c => c.transaction_attributed);
+        const strongRefi = base.filter(c => isStrongRefi(c));
+        return { total: base.length, contacted: contacted.length, signals: signals.length, sellers: sellers.length, refi: refi.length, cma: cma.length, highEquity: highEquity.length, transactions: transactions.length, strongRefi: strongRefi.length };
+      };
+
+      const PartnerCard = ({ partner, stats, isOwn }) => (
+        <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'20px',display:'flex',flexDirection:'column',gap:'16px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'12px'}}>
+            <div className="avatar" style={{width:'44px',height:'44px',fontSize:'16px',background: isOwn ? 'rgba(79,142,247,0.15)' : 'rgba(139,92,246,0.15)'}}>
+              {isOwn ? '🏠' : (partner?.name||'?').split(' ').map(n=>n[0]).join('')}
+            </div>
+            <div>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'15px'}}>{isOwn ? 'Your Database' : partner?.name}</div>
+              <div style={{fontSize:'12px',color:'var(--text3)'}}>{isOwn ? 'Your own clients' : `${partner?.brokerage} · Co-sponsored`}</div>
+            </div>
+            <div style={{marginLeft:'auto',textAlign:'right'}}>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'800',fontSize:'24px',color:'var(--accent)'}}>{stats.total}</div>
+              <div style={{fontSize:'11px',color:'var(--text3)'}}>Total Clients</div>
+            </div>
+          </div>
+
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
+            {[
+              {label:'Signals Detected',value:stats.signals,color:'var(--orange)',icon:'⚡'},
+              {label:'Likely to Sell',value:stats.sellers,color:'var(--orange)',icon:'🏠'},
+              {label:'Refi Candidates',value:stats.refi,color:'var(--accent)',icon:'📉'},
+              {label:'Strong Refi',value:stats.strongRefi,color:'var(--accent)',icon:'💡'},
+              {label:'CMA Requested',value:stats.cma,color:'var(--yellow)',icon:'📋'},
+              {label:'High Equity',value:stats.highEquity,color:'var(--green)',icon:'💰'},
+              {label:'Contacted (mo)',value:stats.contacted,color:'var(--purple)',icon:'📞'},
+              {label:'Transactions',value:stats.transactions,color:'var(--green)',icon:'✅'},
+            ].map(s => (
+              <div key={s.label} style={{background:'var(--surface2)',borderRadius:'8px',padding:'10px 12px'}}>
+                <div style={{fontFamily:'Syne,sans-serif',fontWeight:'800',fontSize:'22px',color:s.color}}>{s.value}</div>
+                <div style={{fontSize:'10.5px',color:'var(--text3)',marginTop:'1px'}}>{s.icon} {s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {!isOwn && stats.signals > 0 && (
+            <div style={{padding:'12px',background:'rgba(79,142,247,0.06)',borderRadius:'8px',borderLeft:'3px solid var(--accent)'}}>
+              <div style={{fontSize:'12px',color:'var(--text)',fontWeight:'600',marginBottom:'4px'}}>📊 Agent Summary</div>
+              <div style={{fontSize:'12px',color:'var(--text2)',lineHeight:'1.6'}}>
+                Your Homebot co-sponsorship is monitoring {stats.total} clients in {partner?.name?.split(' ')[0]}'s database.
+                {stats.sellers > 0 && ` ${stats.sellers} client${stats.sellers !== 1 ? 's are' : ' is'} showing seller signals.`}
+                {stats.refi > 0 && ` ${stats.refi} refi opportunit${stats.refi !== 1 ? 'ies' : 'y'} identified.`}
+                {stats.cma > 0 && ` ${stats.cma} client${stats.cma !== 1 ? 's' : ''} requested a CMA.`}
+                {stats.contacted > 0 && ` ${stats.contacted} conversation${stats.contacted !== 1 ? 's' : ''} initiated this month.`}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+
+      const ownStats = getMonthStats(null);
+
+      return (
+        <div style={{display:'flex',flexDirection:'column',gap:'16px',maxWidth:'800px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <div>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Partner Report Card</div>
+              <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>{now.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => {
+              const summary = [
+                `HOMEBOT OPPORTUNITY REPORT — ${now.toLocaleDateString('en-US',{month:'long',year:'numeric'})}`,
+                ``,
+                `YOUR DATABASE: ${ownStats.total} clients monitored`,
+                `• ${ownStats.signals} signals detected`,
+                `• ${ownStats.sellers} likely to sell`,
+                `• ${ownStats.refi} refi opportunities`,
+                `• ${ownStats.contacted} conversations initiated`,
+                ``,
+                ...topPartners.map(p => {
+                  const s = getMonthStats(p.id);
+                  return [
+                    `${p.name.toUpperCase()} (${p.brokerage}): ${s.total} clients`,
+                    `• ${s.signals} signals · ${s.sellers} sellers · ${s.refi} refi opps · ${s.cma} CMA requests`,
+                  ].join('
+');
+                }),
+              ].join('
+');
+              navigator.clipboard?.writeText(summary);
+              alert('Report summary copied to clipboard!');
+            }}>📋 Copy Summary</button>
+          </div>
+
+          <PartnerCard isOwn={true} stats={ownStats}/>
+          {topPartners.map(p => <PartnerCard key={p.id} partner={p} stats={getMonthStats(p.id)}/>)}
+
+          <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'20px'}}>
+            <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'14px',marginBottom:'12px'}}>📅 Weekly Priority List</div>
+            <div style={{fontSize:'12px',color:'var(--text2)',marginBottom:'12px'}}>Top opportunities to contact this week across all databases:</div>
+            {clients.filter(c=>c.opportunity_score>=70).sort((a,b)=>b.opportunity_score-a.opportunity_score).slice(0,10).map((c,i) => {
+              const partner = topPartners.find(p=>p.id===c.partner_id);
+              const u = urgency(c.opportunity_score);
+              return (
+                <div key={c.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:'1px solid var(--border)',cursor:'pointer'}} onClick={()=>setQuickLook(c)}>
+                  <div style={{fontSize:'12px',color:'var(--text3)',width:'20px',textAlign:'right'}}>#{i+1}</div>
+                  <ScoreRing score={c.opportunity_score} size={28}/>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:'13px',fontWeight:'500'}}>{c.name}</div>
+                    <div style={{fontSize:'11px',color:'var(--text3)'}}>{partner ? partner.name + ' · ' : ''}{nextAction(c)}</div>
+                  </div>
+                  <span style={{fontSize:'11px',color:u.color,fontWeight:'600'}}>{u.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+
+      // Build activity from ALL clients including partners — read from stored events
+      const allActivity = [];
+      clients.forEach(c => {
+        const evts = c.events || [];
+        evts.forEach(ev => allActivity.push({ client: c, event: ev }));
+      });
+      allActivity.sort((a, b) => new Date(b.event.occurred_at) - new Date(a.event.occurred_at));
+      const displayActivity = allActivity.slice(0, 100);
+
+      const eventIcons = {
+        'cma-request': '📊', 'cma_requested': '📊',
+        'viewed-refi-details': '📉', 'refinance_viewed': '📉', 'refi-slider-interaction': '📉',
+        'used-cashout-calculator': '💰',
+        'likely-to-sell': '🏠', 'highly-likely-to-sell': '🏠', 'likely_to_sell': '🏠',
+        'viewed-should-you-sell': '🏡', 'instant-offer-requested': '🏡',
+        'prequal-request': '🔑', 'listings-prequal-request': '🔑', 'loan-application-cta-click': '🔑',
+        'listing-favorited-event': '❤️',
+        'homeowner-direct-message': '💬', 'buyer-direct-message': '💬',
+        'schedule-a-call-cta-click': '📞',
+        'view': '👁', 'homeowner-digest-email-open': '✉', 'homeowner-digest-email-click': '✉',
+        'buyer-digest-email-open': '✉', 'ai-insight': '🤖', 'listings-bot': '🔍',
+        'highly_engaged': '🔥', 'high_equity': '💰',
+      };
+
+      // High value events that deserve special highlight
+      const highValueEvents = new Set(['cma-request','viewed-refi-details','likely-to-sell','highly-likely-to-sell','prequal-request','homeowner-direct-message','schedule-a-call-cta-click','loan-application-cta-click','instant-offer-requested','listings-prequal-request','used-cashout-calculator']);
+
+      return (
+        <div style={{display:'flex',flexDirection:'column',gap:'12px',maxWidth:'780px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'8px'}}>
+            <div>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Activity Feed</div>
+              <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>{allActivity.length} events across {clients.length} clients</div>
+            </div>
+            <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+              <button className="btn btn-ghost btn-sm" onClick={() => {
+                const postmanCall = `POST https://homebotdash.netlify.app/.netlify/functions/backfill-events
+Headers: x-webhook-secret: PalmerHollandDashboard!@#
+Body: {"webhook_client_id": "c2d8e4b6-14ba-4c29-9ba8-bde6464c2142", "offset": 0}`;
+                navigator.clipboard?.writeText(postmanCall);
+                alert('Postman call copied! Run this to backfill historical activity.');
+              }}>📋 Backfill History</button>
+            </div>
+          </div>
+
+          {displayActivity.length === 0 ? (
+            <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'40px 20px',textAlign:'center'}}>
+              <div style={{fontSize:'32px',marginBottom:'12px'}}>⚡</div>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'16px',marginBottom:'8px'}}>No Activity Yet</div>
+              <div style={{fontSize:'13px',color:'var(--text3)',marginBottom:'16px',maxWidth:'400px',margin:'0 auto 16px'}}>
+                As your clients interact with Homebot — viewing their report, requesting a CMA, clicking refi details — those events will appear here in real time.
+              </div>
+              <div style={{fontSize:'12px',color:'var(--text2)',padding:'12px',background:'var(--surface2)',borderRadius:'8px',display:'inline-block',textAlign:'left'}}>
+                <strong style={{color:'var(--accent)'}}>To backfill historical activity:</strong><br/>
+                Click "Backfill History" above to copy the Postman call,<br/>
+                then run it to pull existing events from Homebot.
+              </div>
+            </div>
+          ) : (
+            <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',overflow:'hidden'}}>
+              {displayActivity.map((a, i) => {
+                const ev = a.event;
+                const cl = a.client;
+                const isPartner = !!cl.partner_id;
+                const partnerName = isPartner ? topPartners.find(p => p.id === cl.partner_id)?.name : null;
+                const icon = eventIcons[ev.event_type] || '⚡';
+                const isHighValue = highValueEvents.has(ev.event_type);
+                const label = ev.label || ev.event_type.replace(/-/g,' ').replace(/_/g,' ').replace(/\w/g, c => c.toUpperCase());
+
+                return (
+                  <div key={i} style={{
+                    display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',
+                    borderBottom: i < displayActivity.length-1 ? '1px solid var(--border)' : 'none',
+                    cursor:'pointer',
+                    background: isHighValue ? 'rgba(79,142,247,0.03)' : 'transparent',
+                    transition:'background 0.1s',
+                  }}
+                    onClick={() => setQuickLook(cl)}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
+                    onMouseLeave={e => e.currentTarget.style.background = isHighValue ? 'rgba(79,142,247,0.03)' : 'transparent'}
+                  >
+                    <div style={{
+                      width:'36px',height:'36px',borderRadius:'10px',
+                      background: isHighValue ? 'rgba(79,142,247,0.12)' : isPartner ? 'rgba(139,92,246,0.1)' : 'var(--surface2)',
+                      display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',flexShrink:0,
+                    }}>{icon}</div>
+
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:'flex',alignItems:'center',gap:'6px',flexWrap:'wrap'}}>
+                        <span style={{fontSize:'13px',fontWeight:'600',color:'var(--text)'}}>{cl.name}</span>
+                        <span style={{fontSize:'13px',color:'var(--text2)',fontWeight:'400'}}>{label}</span>
+                        {isHighValue && <span style={{fontSize:'10px',padding:'1px 6px',borderRadius:'8px',background:'rgba(79,142,247,0.12)',color:'var(--accent)',fontWeight:'600'}}>High Value</span>}
+                        {isPartner && <span style={{fontSize:'10px',padding:'1px 6px',borderRadius:'8px',background:'rgba(139,92,246,0.12)',color:'var(--purple)',fontWeight:'500'}}>{partnerName || cl.partner_id}</span>}
+                      </div>
+                      {cl.property_address && (
+                        <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>{cl.property_address}</div>
+                      )}
+                    </div>
+
+                    <div style={{fontSize:'11.5px',color:'var(--text3)',flexShrink:0,textAlign:'right'}}>
+                      {fmt.date(ev.occurred_at)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    }
       // Build activity from all clients including partners
       const allActivity = [];
       clients.forEach(c => {
@@ -1740,6 +2420,26 @@ Content-Type: application/vnd.api+json
                     </div>
                   </div>
                   <div style={{padding:'14px',background:'var(--surface2)',borderRadius:'8px'}}>
+                    <div style={{fontSize:'12px',color:'var(--text3)',marginBottom:'6px'}}>BombBomb API Key</div>
+                    <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                      <input
+                        style={{flex:1,background:'var(--surface3)',border:'1px solid var(--border)',borderRadius:'6px',padding:'7px 10px',color:'var(--text)',fontSize:'13px',outline:'none',fontFamily:'DM Sans,sans-serif'}}
+                        type="password"
+                        placeholder="Paste your BombBomb API key..."
+                        value={bombBombApiKey}
+                        onChange={e => {
+                          setBombBombApiKey(e.target.value);
+                          try { localStorage.setItem('hb_bombbomb_key', e.target.value); } catch {}
+                        }}
+                      />
+                      {bombBombApiKey && <span style={{fontSize:'11px',color:'var(--green)'}}>✓ Set</span>}
+                    </div>
+                    <div style={{fontSize:'11px',color:'var(--text3)',marginTop:'6px'}}>
+                      Find in BombBomb → Settings → Integrations → API Key. Enables the Send Video button on client profiles.
+                    </div>
+                  </div>
+
+                  <div style={{padding:'14px',background:'var(--surface2)',borderRadius:'8px'}}>
                     <div style={{fontSize:'12px',color:'var(--text3)',marginBottom:'6px'}}>Data Mode</div>
                     <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
                       <div style={{width:'8px',height:'8px',borderRadius:'50%',background:USE_MOCK_DATA?'var(--yellow)':'var(--green)'}}/>
@@ -1988,12 +2688,15 @@ Content-Type: application/vnd.api+json
             ))}
           </div>
           <div className="sidebar-footer">
-            <div className="user-card">
-              <div className="avatar">JD</div>
-              <div className="user-info">
-                <div className="user-name">James Davis</div>
-                <div className="user-role">Loan Officer</div>
+            <div className="user-card" style={{cursor:'pointer'}} onClick={() => setActiveNav("Settings")}>
+              <div className="avatar" style={{width:'34px',height:'34px',fontSize:'12px',flexShrink:0}}>
+                {loProfile.name.split(' ').map(n=>n[0]).join('')}
               </div>
+              <div className="user-info">
+                <div className="user-name">{loProfile.name}</div>
+                <div className="user-role">{loProfile.title}</div>
+              </div>
+              <div style={{marginLeft:'auto',fontSize:'10px',color:'var(--text3)'}}>⚙</div>
             </div>
           </div>
         </div>
@@ -2037,6 +2740,32 @@ Content-Type: application/vnd.api+json
             client={quickLook}
             partner={topPartners.find(p => p.id === quickLook.partner_id)}
             onClose={() => setQuickLook(null)}
+            onOutreachLogged={() => showToast('Outreach logged')}
+            onAttributeTransaction={(c) => { setAttributeClient(c); setShowAttributeModal(true); setQuickLook(null); }}
+            onDisposition={(c) => { setDispositionClient(c); setShowDispositionModal(true); setQuickLook(null); }}
+            bombBombApiKey={bombBombApiKey}
+          />
+        )}
+
+        {/* Disposition Modal */}
+        {showDispositionModal && dispositionClient && (
+          <DispositionModal
+            client={dispositionClient}
+            onClose={() => { setShowDispositionModal(false); setDispositionClient(null); }}
+            onSave={(d) => showToast(`${dispositionClient.name} dispositioned as ${d.disposition.replace(/_/g,' ')}`)}
+          />
+        )}
+
+        {/* Transaction Attribution Modal */}
+        {showAttributeModal && attributeClient && (
+          <TransactionModal
+            client={attributeClient}
+            onClose={() => { setShowAttributeModal(false); setAttributeClient(null); }}
+            onSave={(t) => {
+              showToast(`Transaction logged for ${t.client_name}`);
+              setShowAttributeModal(false);
+              setAttributeClient(null);
+            }}
           />
         )}
 
