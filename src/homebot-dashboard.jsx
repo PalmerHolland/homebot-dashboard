@@ -1818,11 +1818,9 @@ export default function App() {
                   return [
                     `${p.name.toUpperCase()} (${p.brokerage}): ${s.total} clients`,
                     `• ${s.signals} signals · ${s.sellers} sellers · ${s.refi} refi opps · ${s.cma} CMA requests`,
-                  ].join('
-');
+                  ].join('\n');
                 }),
-              ].join('
-');
+              ].join('\n');
               navigator.clipboard?.writeText(summary);
               alert('Report summary copied to clipboard!');
             }}>📋 Copy Summary</button>
@@ -1891,9 +1889,7 @@ export default function App() {
             </div>
             <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
               <button className="btn btn-ghost btn-sm" onClick={() => {
-                const postmanCall = `POST https://homebotdash.netlify.app/.netlify/functions/backfill-events
-Headers: x-webhook-secret: PalmerHollandDashboard!@#
-Body: {"webhook_client_id": "c2d8e4b6-14ba-4c29-9ba8-bde6464c2142", "offset": 0}`;
+                const postmanCall = `POST https://homebotdash.netlify.app/.netlify/functions/backfill-events\nHeaders: x-webhook-secret: PalmerHollandDashboard!@#\nBody: {"webhook_client_id": "c2d8e4b6-14ba-4c29-9ba8-bde6464c2142", "offset": 0}`;
                 navigator.clipboard?.writeText(postmanCall);
                 alert('Postman call copied! Run this to backfill historical activity.');
               }}>📋 Backfill History</button>
