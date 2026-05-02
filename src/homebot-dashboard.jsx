@@ -684,6 +684,334 @@ function QuickLook({ client, partner, onClose, onOutreachLogged, onAttributeTran
   );
 }
 
+// ─── PDF REPORT GENERATOR ────────────────────────────────────────────────────
+async function generatePartnerPDF({ topPartners, getMonthStats, clients, ownStats, now, loProfile, mode = 'master', partnerId = null, partnerName = '', partnerBrokerage = '' }) {
+  const isPartnerMode = mode === 'partner' && partnerId;
+  const reportTitle = isPartnerMode
+    ? `${partnerName} — Client Opportunity Report`
+    : 'Partner Report Card';
+  const reportClients = isPartnerMode
+    ? clients.filter(c => c.partner_id === partnerId)
+    : clients;
+  const partnerStats = isPartnerMode ? getMonthStats(partnerId) : null;
+  // Dynamically load jsPDF
+  if (!window.jsPDF) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+  const pageW = 215.9;
+  const pageH = 279.4;
+  const margin = 18;
+  const col = pageW - margin * 2;
+  let y = 0;
+
+  // Colors
+  const navy = [19, 22, 31];
+  const accent = [79, 142, 247];
+  const green = [16, 185, 129];
+  const orange = [245, 158, 11];
+  const red = [239, 68, 68];
+  const purple = [139, 92, 246];
+  const lightGray = [240, 242, 247];
+  const midGray = [160, 165, 180];
+  const darkGray = [60, 65, 80];
+
+  const addPage = () => {
+    doc.addPage();
+    y = margin;
+    // Page header
+    doc.setFillColor(...navy);
+    doc.rect(0, 0, pageW, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.text('HOMEBOT LO OPPORTUNITY DASHBOARD', margin, 7.5);
+    doc.text(`${loProfile.name} · ${now.toLocaleDateString('en-US',{month:'long',year:'numeric'})}`, pageW - margin, 7.5, { align: 'right' });
+    y = 20;
+  };
+
+  const checkPage = (needed = 20) => {
+    if (y + needed > pageH - margin) addPage();
+  };
+
+  const statBox = (x, bY, bW, bH, value, label, color, icon = '') => {
+    doc.setFillColor(...lightGray);
+    doc.roundedRect(x, bY, bW, bH, 2, 2, 'F');
+    doc.setTextColor(...color);
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text(String(value), x + bW / 2, bY + bH * 0.52, { align: 'center' });
+    doc.setTextColor(...midGray);
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(label, x + bW / 2, bY + bH * 0.80, { align: 'center' });
+  };
+
+  // ── COVER ────────────────────────────────────────────────────────────────
+  doc.setFillColor(...navy);
+  doc.rect(0, 0, pageW, 72, 'F');
+  // Accent bar
+  doc.setFillColor(...accent);
+  doc.rect(0, 68, pageW, 4, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text('HOMEBOT LO OPPORTUNITY DASHBOARD', margin, 24);
+
+  doc.setFontSize(isPartnerMode ? 20 : 26);
+  doc.setFont('helvetica', 'bold');
+  doc.text(reportTitle, margin, 38);
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'normal');
+  doc.text(now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }), margin, 48);
+
+  doc.setFontSize(9);
+  doc.text(`Prepared by: ${loProfile.name}`, margin, 58);
+  doc.text(loProfile.title, margin, 64.5);
+  if (isPartnerMode) {
+    doc.setFontSize(8);
+    doc.setTextColor(200, 215, 245);
+    doc.text(`Homebot Co-Sponsorship Report · ${allClients} clients monitored`, margin, 71);
+  }
+
+  y = 84;
+
+  // ── SUMMARY ROW ──────────────────────────────────────────────────────────
+  doc.setTextColor(...darkGray);
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Executive Summary', margin, y);
+  y += 6;
+
+  const allClients = reportClients.length;
+  const allSellers = reportClients.filter(c => (c.metrics?.likely_to_sell_score || 0) >= 70).length;
+  const allRefi = reportClients.filter(c => c.metrics?.refinance_opportunity).length;
+  const allCMA = reportClients.filter(c => c.metrics?.cma_requested).length;
+  const allHighEquity = reportClients.filter(c => (c.metrics?.equity_percent || 0) >= 50).length;
+  const allCallToday = reportClients.filter(c => c.opportunity_score >= 85).length;
+
+  const boxW = (col - 10) / 6;
+  const boxes = [
+    { v: allClients, l: 'Total Clients', c: accent },
+    { v: allCallToday, l: 'Call Today', c: red },
+    { v: allSellers, l: 'Likely to Sell', c: orange },
+    { v: allRefi, l: 'Refi Opps', c: accent },
+    { v: allHighEquity, l: 'High Equity', c: green },
+    { v: allCMA, l: 'CMA Requested', c: purple },
+  ];
+  boxes.forEach((b, i) => statBox(margin + i * (boxW + 2), y, boxW, 22, b.v, b.l, b.c));
+  y += 30;
+
+  // ── DATABASE SECTION ─────────────────────────────────────────────────────
+  if (!isPartnerMode) {
+    checkPage(60);
+    doc.setFillColor(...navy);
+    doc.roundedRect(margin, y, col, 8, 2, 2, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('YOUR DATABASE', margin + 4, y + 5.5);
+    y += 12;
+
+    const ownBoxW = (col - 14) / 7;
+    const ownBoxes = [
+      { v: ownStats.total, l: 'Clients', c: accent },
+      { v: ownStats.signals, l: 'Signals', c: orange },
+      { v: ownStats.sellers, l: 'Likely to Sell', c: orange },
+      { v: ownStats.refi, l: 'Refi Opps', c: accent },
+      { v: ownStats.strongRefi, l: 'Strong Refi', c: accent },
+      { v: ownStats.cma, l: 'CMA Requests', c: purple },
+      { v: ownStats.highEquity, l: 'High Equity', c: green },
+    ];
+    ownBoxes.forEach((b, i) => statBox(margin + i * (ownBoxW + 2.33), y, ownBoxW, 20, b.v, b.l, b.c));
+    y += 28;
+  }
+
+  // ── PARTNER SECTIONS ─────────────────────────────────────────────────────
+  // In partner mode only show the one partner, in master show all
+  const partnersToShow = isPartnerMode
+    ? topPartners.filter(p => p.id === partnerId)
+    : topPartners;
+
+  for (const partner of partnersToShow) {
+    const ps = getMonthStats(partner.id);
+    checkPage(80);
+
+    // Partner header
+    doc.setFillColor(...purple);
+    doc.roundedRect(margin, y, col, 8, 2, 2, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${partner.name.toUpperCase()} — ${partner.brokerage || 'Real Estate'}`, margin + 4, y + 5.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${ps.total} clients monitored`, pageW - margin - 2, y + 5.5, { align: 'right' });
+    y += 12;
+
+    const pBoxW = (col - 14) / 7;
+    const pBoxes = [
+      { v: ps.total, l: 'Clients', c: purple },
+      { v: ps.signals, l: 'Signals', c: orange },
+      { v: ps.sellers, l: 'Likely to Sell', c: orange },
+      { v: ps.refi, l: 'Refi Opps', c: accent },
+      { v: ps.strongRefi || 0, l: 'Strong Refi', c: accent },
+      { v: ps.cma, l: 'CMA Requests', c: purple },
+      { v: ps.highEquity, l: 'High Equity', c: green },
+    ];
+    pBoxes.forEach((b, i) => statBox(margin + i * (pBoxW + 2.33), y, pBoxW, 20, b.v, b.l, b.c));
+    y += 28;
+
+    // Top opportunities for this partner
+    const topLimit = isPartnerMode ? 20 : 5;
+    const partnerTopClients = clients
+      .filter(c => c.partner_id === partner.id && c.opportunity_score >= 30)
+      .sort((a, b) => b.opportunity_score - a.opportunity_score)
+      .slice(0, topLimit);
+
+    if (partnerTopClients.length > 0) {
+      checkPage(10);
+      doc.setTextColor(...darkGray);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Top Opportunities', margin, y);
+      y += 5;
+
+      for (const c of partnerTopClients) {
+        checkPage(10);
+        const scoreColor = c.opportunity_score >= 85 ? red : c.opportunity_score >= 70 ? orange : midGray;
+        doc.setFillColor(...lightGray);
+        doc.rect(margin, y, col, 8, 'F');
+        doc.setTextColor(...darkGray);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'bold');
+        doc.text(c.name, margin + 3, y + 5.2);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(...midGray);
+        doc.setFontSize(7);
+        const triggers = (c.triggers || []).slice(0, 2).map(t => t.replace(/_/g, ' ')).join(' · ');
+        doc.text(triggers || 'General monitoring', margin + 55, y + 5.2);
+        doc.setTextColor(...scoreColor);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`${c.opportunity_score}`, pageW - margin - 3, y + 5.2, { align: 'right' });
+        y += 9;
+      }
+      y += 4;
+    }
+
+    // Value narrative
+    checkPage(20);
+    doc.setFillColor(230, 240, 255);
+    doc.roundedRect(margin, y, col, 16, 2, 2, 'F');
+    doc.setDrawColor(...accent);
+    doc.setLineWidth(0.5);
+    doc.roundedRect(margin, y, 1.5, 16, 0.5, 0.5, 'F');
+    doc.setTextColor(...darkGray);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    const narrative = `Your Homebot co-sponsorship is actively monitoring ${ps.total} clients in ${partner.name.split(' ')[0]}'s database.${ps.sellers > 0 ? ` ${ps.sellers} client${ps.sellers !== 1 ? 's are' : ' is'} showing seller signals.` : ''}${ps.refi > 0 ? ` ${ps.refi} refinance ${ps.refi !== 1 ? 'opportunities' : 'opportunity'} identified.` : ''}${ps.cma > 0 ? ` ${ps.cma} CMA ${ps.cma !== 1 ? 'requests' : 'request'} received.` : ''} These signals represent real conversations waiting to happen.`;
+    const lines = doc.splitTextToSize(narrative, col - 8);
+    doc.text(lines, margin + 5, y + 5.5);
+    y += 22;
+  }
+
+  // ── PRIORITY CALL LIST ───────────────────────────────────────────────────
+  checkPage(60);
+  doc.setFillColor(...navy);
+  doc.roundedRect(margin, y, col, 8, 2, 2, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.text('PRIORITY CALL LIST — THIS WEEK', margin + 4, y + 5.5);
+  y += 12;
+
+  const priorityLimit = isPartnerMode ? 30 : 15;
+  const priorityClients = reportClients
+    .filter(c => c.opportunity_score >= 30)
+    .sort((a, b) => b.opportunity_score - a.opportunity_score)
+    .slice(0, priorityLimit);
+
+  // Table header
+  doc.setFillColor(...darkGray);
+  doc.rect(margin, y, col, 7, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(7);
+  doc.setFont('helvetica', 'bold');
+  doc.text('#', margin + 3, y + 4.8);
+  doc.text('CLIENT', margin + 10, y + 4.8);
+  doc.text('PARTNER', margin + 75, y + 4.8);
+  doc.text('SIGNAL', margin + 115, y + 4.8);
+  doc.text('SCORE', pageW - margin - 3, y + 4.8, { align: 'right' });
+  y += 8;
+
+  priorityClients.forEach((c, i) => {
+    checkPage(9);
+    doc.setFillColor(i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 249 : 255, i % 2 === 0 ? 252 : 255);
+    doc.rect(margin, y, col, 7.5, 'F');
+    const scoreColor = c.opportunity_score >= 85 ? red : c.opportunity_score >= 70 ? orange : midGray;
+    const partner = topPartners.find(p => p.id === c.partner_id);
+    doc.setTextColor(...darkGray);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${i + 1}`, margin + 3, y + 5);
+    doc.setFont('helvetica', 'bold');
+    doc.text(c.name.length > 28 ? c.name.substring(0, 27) + '.' : c.name, margin + 10, y + 5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...midGray);
+    doc.text(partner ? (partner.name.split(' ')[0] + ' ' + (partner.name.split(' ')[1] || '')) : 'Own', margin + 75, y + 5);
+    const sig = (c.triggers || []).slice(0, 1).map(t => t.replace(/_/g, ' '))[0] || '—';
+    doc.text(sig.length > 20 ? sig.substring(0, 19) + '.' : sig, margin + 115, y + 5);
+    doc.setTextColor(...scoreColor);
+    doc.setFont('helvetica', 'bold');
+    doc.text(String(c.opportunity_score), pageW - margin - 3, y + 5, { align: 'right' });
+    y += 8;
+  });
+
+  y += 6;
+
+  // ── FOOTER ───────────────────────────────────────────────────────────────
+  checkPage(20);
+  doc.setFillColor(...lightGray);
+  doc.rect(margin, y, col, 14, 'F');
+  doc.setTextColor(...darkGray);
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`${loProfile.name}`, margin + 4, y + 5.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.text(`${loProfile.title}`, margin + 4, y + 10.5);
+  doc.setTextColor(...accent);
+  if (loProfile.email) doc.text(loProfile.email, pageW - margin - 4, y + 5.5, { align: 'right' });
+  if (loProfile.phone) doc.text(loProfile.phone, pageW - margin - 4, y + 10.5, { align: 'right' });
+
+  // Page numbers
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setTextColor(...midGray);
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Page ${i} of ${pageCount}`, pageW / 2, pageH - 6, { align: 'center' });
+    doc.text('Powered by Homebot LO Opportunity Dashboard', margin, pageH - 6);
+  }
+
+  const dateStr = now.toLocaleDateString('en-US',{month:'short',year:'numeric'}).replace(' ','-');
+  const fileName = isPartnerMode
+    ? `${partnerName.replace(/\s+/g, '-')}-Report-${dateStr}.pdf`
+    : `Homebot-Master-Report-${dateStr}.pdf`;
+  doc.save(fileName);
+}
+
 // ─── DISPOSITION MODAL ───────────────────────────────────────────────────────
 function DispositionModal({ client, onClose, onSave }) {
   const [disposition, setDisposition] = useState("");
@@ -1803,31 +2131,49 @@ export default function App() {
               <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Partner Report Card</div>
               <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>{now.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</div>
             </div>
-            <button className="btn btn-ghost btn-sm" onClick={() => {
-              const summary = [
-                `HOMEBOT OPPORTUNITY REPORT — ${now.toLocaleDateString('en-US',{month:'long',year:'numeric'})}`,
-                ``,
-                `YOUR DATABASE: ${ownStats.total} clients monitored`,
-                `• ${ownStats.signals} signals detected`,
-                `• ${ownStats.sellers} likely to sell`,
-                `• ${ownStats.refi} refi opportunities`,
-                `• ${ownStats.contacted} conversations initiated`,
-                ``,
-                ...topPartners.map(p => {
-                  const s = getMonthStats(p.id);
-                  return [
-                    `${p.name.toUpperCase()} (${p.brokerage}): ${s.total} clients`,
-                    `• ${s.signals} signals · ${s.sellers} sellers · ${s.refi} refi opps · ${s.cma} CMA requests`,
-                  ].join('\n');
-                }),
-              ].join('\n');
-              navigator.clipboard?.writeText(summary);
-              alert('Report summary copied to clipboard!');
-            }}>📋 Copy Summary</button>
+            <div style={{display:'flex',gap:'8px'}}>
+              <button className="btn btn-ghost btn-sm" onClick={() => {
+                const summary = [
+                  `HOMEBOT OPPORTUNITY REPORT — ${now.toLocaleDateString('en-US',{month:'long',year:'numeric'})}`,
+                  ``,
+                  `YOUR DATABASE: ${ownStats.total} clients monitored`,
+                  `• ${ownStats.signals} signals detected`,
+                  `• ${ownStats.sellers} likely to sell`,
+                  `• ${ownStats.refi} refi opportunities`,
+                  `• ${ownStats.contacted} conversations initiated`,
+                  ``,
+                  ...topPartners.map(p => {
+                    const s = getMonthStats(p.id);
+                    return [
+                      `${p.name.toUpperCase()} (${p.brokerage}): ${s.total} clients`,
+                      `• ${s.signals} signals · ${s.sellers} sellers · ${s.refi} refi opps · ${s.cma} CMA requests`,
+                    ].join('\n');
+                  }),
+                ].join('\n');
+                navigator.clipboard?.writeText(summary);
+                alert('Report summary copied to clipboard!');
+              }}>📋 Copy Summary</button>
+              <button className="btn btn-primary btn-sm" onClick={() => generatePartnerPDF({topPartners, getMonthStats, clients, ownStats, now, loProfile, mode:'master'})}>
+                📄 Master Report
+              </button>
+            </div>
           </div>
 
           <PartnerCard isOwn={true} stats={ownStats}/>
-          {topPartners.map(p => <PartnerCard key={p.id} partner={p} stats={getMonthStats(p.id)}/>)}
+          {topPartners.map(p => {
+            const ps = getMonthStats(p.id);
+            return (
+              <div key={p.id}>
+                <PartnerCard partner={p} stats={ps}/>
+                <div style={{display:'flex',justifyContent:'flex-end',marginTop:'-8px',marginBottom:'8px'}}>
+                  <button className="btn btn-ghost btn-sm" style={{fontSize:'11px',color:'var(--purple)',borderColor:'rgba(139,92,246,0.3)'}}
+                    onClick={() => generatePartnerPDF({topPartners, getMonthStats, clients, ownStats, now, loProfile, mode:'partner', partnerId: p.id, partnerName: p.name, partnerBrokerage: p.brokerage})}>
+                    📄 Generate {p.name.split(' ')[0]}'s Report
+                  </button>
+                </div>
+              </div>
+            );
+          })}
 
           <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'20px'}}>
             <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'14px',marginBottom:'12px'}}>📅 Weekly Priority List</div>
