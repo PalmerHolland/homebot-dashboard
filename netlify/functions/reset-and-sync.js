@@ -11,7 +11,10 @@ const { getAllClients, homebotRequest, normalizeClient } = require("./lib/homebo
 function getBlobStore(name) {
   const siteID = process.env.NETLIFY_SITE_ID;
   const token = process.env.NETLIFY_AUTH_TOKEN;
-  if (siteID && token) return getStore({ name, siteID, token });
+  const isNetlifyContext = !!process.env.NETLIFY_BLOBS_CONTEXT;
+  if (!isNetlifyContext && siteID && token) {
+    return getStore({ name, siteID, token });
+  }
   return getStore(name);
 }
 

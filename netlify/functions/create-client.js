@@ -22,11 +22,17 @@ const { getStore } = require("@netlify/blobs");
 
 // Helper to get a Blobs store with explicit credentials when needed
 function getBlobStore(name) {
+  // Inside Netlify functions, auth is handled automatically
+  // Only pass manual credentials if explicitly set AND we're not in a Netlify context
   const siteID = process.env.NETLIFY_SITE_ID;
   const token = process.env.NETLIFY_AUTH_TOKEN;
-  if (siteID && token) {
+  const isNetlifyContext = !!process.env.NETLIFY_BLOBS_CONTEXT;
+  
+  if (!isNetlifyContext && siteID && token) {
+    // Local/manual context — use explicit credentials
     return getStore({ name, siteID, token });
   }
+  // Inside Netlify — use automatic auth
   return getStore(name);
 }
 const {
