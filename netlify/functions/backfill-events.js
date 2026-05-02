@@ -110,6 +110,19 @@ exports.handler = async (event) => {
     const remaining = Math.max(totalCount - offset - events.length, 0);
 
     console.log(`Processing ${events.length} events (offset ${offset}, total ${totalCount})`);
+    if (events.length > 0) {
+      // Log first event structure to debug client ID matching
+      const sampleEvent = events[0];
+      const sampleAttrs = sampleEvent.attributes || {};
+      const sampleData = sampleAttrs.event_data || {};
+      console.log("Sample event structure:", JSON.stringify({
+        id: sampleEvent.id,
+        event_data_client_id: sampleData.client_id,
+        attrs_client_id: sampleAttrs.client_id,
+        action: sampleData.action || sampleAttrs.action,
+        source: sampleData.source || sampleAttrs.source,
+      }));
+    }
 
     let processed = 0;
     let updated = 0;
@@ -125,17 +138,19 @@ exports.handler = async (event) => {
 
       if (!clientId) continue;
 
-      // Find the client record
+      // Find the client record — try multiple key formats
       const ownKey = `hb_${clientId}`;
       const partnerKey = partnerId ? `partner_${partnerId}_${clientId}` : null;
       let storeKey = null;
       let client = null;
 
+      // Try own key first
       try {
         client = await clientStore.get(ownKey, { type: "json" });
         if (client) storeKey = ownKey;
       } catch {}
 
+      // Try partner key
       if (!client && partnerKey) {
         try {
           client = await clientStore.get(partnerKey, { type: "json" });
@@ -143,7 +158,22 @@ exports.handler = async (event) => {
         } catch {}
       }
 
-      if (!client || !storeKey) continue;
+      // Try all registered partners if still not found
+      if (!client) {
+        const allPartnerTokens = JSON.parse(process.env.PARTNER_TOKENS || "{}");
+        for (const pid of Object.keys(allPartnerTokens)) {
+          try {
+            const pk = `partner_${pid}_${clientId}`;
+            client = await clientStore.get(pk, { type: "json" });
+            if (client) { storeKey = pk; break; }
+          } catch {}
+        }
+      }
+
+      if (!client || !storeKey) {
+        console.log(`Client ${clientId} not found in any store`);
+        continue;
+      }
 
       // Build event record
       const eventRecord = {
