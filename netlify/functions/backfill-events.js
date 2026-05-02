@@ -151,56 +151,48 @@ exports.handler = async (event) => {
       let storeKey = null;
       let client = null;
 
-      // Try own key first (hb_ prefix)
+      // Our store keys are: hb_{homebot_client_id} for own clients
+      // and partner_{pid}_{homebot_client_id} for partner clients
+      // Try own key directly
       try {
-        client = await clientStore.get(ownKey, { type: "json" });
-        if (client) storeKey = ownKey;
+        const result = await clientStore.get(ownKey, { type: "json" });
+        if (result && result.homebot_client_id) { client = result; storeKey = ownKey; }
       } catch {}
 
-      // Try partner key
-      if (!client && partnerKey) {
-        try {
-          client = await clientStore.get(partnerKey, { type: "json" });
-          if (client) storeKey = partnerKey;
-        } catch {}
-      }
-
-      // Try all registered partners
+      // Try partner keys
       if (!client) {
         const allPartnerTokens = JSON.parse(process.env.PARTNER_TOKENS || "{}");
         for (const pid of Object.keys(allPartnerTokens)) {
           try {
             const pk = `partner_${pid}_${clientId}`;
-            client = await clientStore.get(pk, { type: "json" });
-            if (client) { storeKey = pk; break; }
+            const result = await clientStore.get(pk, { type: "json" });
+            if (result && result.homebot_client_id) { client = result; storeKey = pk; break; }
           } catch {}
         }
       }
 
-      // Last resort — search by email if we have it
+      // Email fallback using index (fast — no full scan)
       if (!client && clientEmail) {
-        const allKeys = await (async () => {
-          let keys = [];
-          try { keys = [...keys, ...((await indexStore.get("client_keys", { type: "json" })) || [])]; } catch {}
-          const pts = JSON.parse(process.env.PARTNER_TOKENS || "{}");
-          for (const pid of Object.keys(pts)) {
-            try { keys = [...keys, ...((await indexStore.get(`partner_${pid}_keys`, { type: "json" })) || [])]; } catch {}
+        try {
+          // Build email->key map from stored index
+          const emailIndex = await indexStore.get("email_index", { type: "json" }) || {};
+          const emailKey = clientEmail.toLowerCase();
+          if (emailIndex[emailKey]) {
+            storeKey = emailIndex[emailKey];
+            try { client = await clientStore.get(storeKey, { type: "json" }); } catch {}
           }
-          return keys;
-        })();
-
-        for (const key of allKeys) {
-          try {
-            const c = await clientStore.get(key, { type: "json" });
-            if (c && c.email && c.email.toLowerCase() === clientEmail.toLowerCase()) {
-              client = c; storeKey = key; break;
-            }
-          } catch {}
-        }
+        } catch {}
       }
 
       if (!client || !storeKey) {
-        console.log(`Client ${clientId} (${clientName}) not found`);
+        // Store in email index for future lookups
+        if (clientEmail && clientId) {
+          try {
+            const emailIndex = await indexStore.get("email_index", { type: "json" }) || {};
+            emailIndex[clientEmail.toLowerCase()] = ownKey;
+            await indexStore.setJSON("email_index", emailIndex);
+          } catch {}
+        }
         continue;
       }
 
