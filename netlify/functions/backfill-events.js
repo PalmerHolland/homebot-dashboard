@@ -111,17 +111,14 @@ exports.handler = async (event) => {
 
     console.log(`Processing ${events.length} events (offset ${offset}, total ${totalCount})`);
     if (events.length > 0) {
-      // Log first event structure to debug client ID matching
+      // Log FULL raw event to see exact Homebot structure
       const sampleEvent = events[0];
-      const sampleAttrs = sampleEvent.attributes || {};
-      const sampleData = sampleAttrs.event_data || {};
-      console.log("Sample event structure:", JSON.stringify({
-        id: sampleEvent.id,
-        event_data_client_id: sampleData.client_id,
-        attrs_client_id: sampleAttrs.client_id,
-        action: sampleData.action || sampleAttrs.action,
-        source: sampleData.source || sampleAttrs.source,
-      }));
+      console.log("FULL raw event:", JSON.stringify(sampleEvent).substring(0, 1000));
+      console.log("All event keys:", Object.keys(sampleEvent));
+      if (sampleEvent.attributes) {
+        console.log("Attributes keys:", Object.keys(sampleEvent.attributes));
+        console.log("Attributes:", JSON.stringify(sampleEvent.attributes).substring(0, 500));
+      }
     }
 
     let processed = 0;
