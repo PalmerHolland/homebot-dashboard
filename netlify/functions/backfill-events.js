@@ -127,11 +127,21 @@ exports.handler = async (event) => {
 
     for (const evt of events) {
       processed++;
-      const attrs = evt.attributes || {};
-      const eventData = attrs.event_data || {};
-      const clientId = eventData.client_id || attrs.client_id;
-      const eventType = eventData.action || eventData.source || attrs.event_type || "view";
-      const occurredAt = eventData.created_at || attrs.created_at || new Date().toISOString();
+      // Homebot nests event data at: attributes.body.attributes.event_data
+      const topAttrs = evt.attributes || {};
+      const body = topAttrs.body || {};
+      const bodyAttrs = body.attributes || {};
+      const eventData = bodyAttrs.event_data || {};
+
+      // Extract client info
+      const clientId = eventData.client_id;
+      const clientEmail = eventData.client_email || "";
+      const clientName = eventData.client_name || "";
+      const eventType = eventData.event_name || eventData.action || topAttrs["event-type"] || "view";
+      const occurredAt = eventData.created_at || bodyAttrs.created_at || topAttrs["created-at"] || new Date().toISOString();
+      const eventId = eventData.id || evt.id;
+
+      if (!clientId) continue;
 
       if (!clientId) continue;
 
@@ -141,7 +151,7 @@ exports.handler = async (event) => {
       let storeKey = null;
       let client = null;
 
-      // Try own key first
+      // Try own key first (hb_ prefix)
       try {
         client = await clientStore.get(ownKey, { type: "json" });
         if (client) storeKey = ownKey;
@@ -155,7 +165,7 @@ exports.handler = async (event) => {
         } catch {}
       }
 
-      // Try all registered partners if still not found
+      // Try all registered partners
       if (!client) {
         const allPartnerTokens = JSON.parse(process.env.PARTNER_TOKENS || "{}");
         for (const pid of Object.keys(allPartnerTokens)) {
@@ -167,14 +177,36 @@ exports.handler = async (event) => {
         }
       }
 
+      // Last resort — search by email if we have it
+      if (!client && clientEmail) {
+        const allKeys = await (async () => {
+          let keys = [];
+          try { keys = [...keys, ...((await indexStore.get("client_keys", { type: "json" })) || [])]; } catch {}
+          const pts = JSON.parse(process.env.PARTNER_TOKENS || "{}");
+          for (const pid of Object.keys(pts)) {
+            try { keys = [...keys, ...((await indexStore.get(`partner_${pid}_keys`, { type: "json" })) || [])]; } catch {}
+          }
+          return keys;
+        })();
+
+        for (const key of allKeys) {
+          try {
+            const c = await clientStore.get(key, { type: "json" });
+            if (c && c.email && c.email.toLowerCase() === clientEmail.toLowerCase()) {
+              client = c; storeKey = key; break;
+            }
+          } catch {}
+        }
+      }
+
       if (!client || !storeKey) {
-        console.log(`Client ${clientId} not found in any store`);
+        console.log(`Client ${clientId} (${clientName}) not found`);
         continue;
       }
 
       // Build event record
       const eventRecord = {
-        event_id: evt.id,
+        event_id: eventId || evt.id,
         event_type: eventType,
         label: EVENT_LABELS[eventType] || eventType.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
         occurred_at: occurredAt,
