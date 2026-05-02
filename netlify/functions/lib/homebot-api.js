@@ -412,23 +412,24 @@ function mergeClientData(client, home, loan) {
 // ─── CALCULATIONS ─────────────────────────────────────────────────────────────
 
 function estimateOutstandingBalance(loan) {
-  if (!loan || !loan.amount || !loan.rate || !loan.term_years) return 0;
+  if (!loan || !loan.amount) return 0;
   const loanDate = loan.first_payment_due_date || loan.date;
-  if (!loanDate) return loan.amount * 0.85; // conservative estimate
-
-  const monthlyRate = loan.rate / 100 / 12;
-  const totalPayments = loan.term_years * 12;
-  const monthsElapsed = Math.floor(
+  const termYears = loan.term_years || 30;
+  const totalPayments = termYears * 12;
+  // Rate is stored as percentage (e.g. 6.99) — convert to monthly decimal
+  const rawRate = loan.rate || 0;
+  const annualRate = rawRate > 1 ? rawRate / 100 : rawRate;
+  const monthlyRate = annualRate / 12;
+  if (!loanDate) return loan.amount * 0.85;
+  const monthsElapsed = Math.max(0, Math.floor(
     (Date.now() - new Date(loanDate).getTime()) / (1000 * 60 * 60 * 24 * 30.44)
-  );
+  ));
   const remainingPayments = Math.max(totalPayments - monthsElapsed, 0);
-
+  if (remainingPayments <= 0) return 0;
   if (monthlyRate === 0) return (loan.amount / totalPayments) * remainingPayments;
-
   const monthlyPayment = loan.amount * (monthlyRate * Math.pow(1 + monthlyRate, totalPayments))
     / (Math.pow(1 + monthlyRate, totalPayments) - 1);
-
-  return monthlyPayment * (1 - Math.pow(1 + monthlyRate, -remainingPayments)) / monthlyRate;
+  return Math.max(0, Math.round(monthlyPayment * (1 - Math.pow(1 + monthlyRate, -remainingPayments)) / monthlyRate));
 }
 
 function deriveTriggers(client, loan, equityPercent, refiOpportunity) {
