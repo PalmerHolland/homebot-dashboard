@@ -1852,6 +1852,7 @@ export default function App() {
       );
     }
 
+    if (activeNav === "Activity Feed") {
 
       // Build activity from ALL clients including partners — read from stored events
       const allActivity = [];
@@ -1958,72 +1959,6 @@ export default function App() {
               })}
             </div>
           )}
-        </div>
-      );
-    }
-      // Build activity from all clients including partners
-      const allActivity = [];
-      clients.forEach(c => {
-        if (c.events && c.events.length > 0) {
-          c.events.forEach(ev => {
-            allActivity.push({ client: c, event: ev });
-          });
-        }
-      });
-      allActivity.sort((a, b) => new Date(b.event.occurred_at) - new Date(a.event.occurred_at));
-      const displayActivity = allActivity.slice(0, 50);
-
-      const eventIcons = {
-        'cma-request': '📊', 'cma_requested': '📊',
-        'viewed-refi-details': '📉', 'refinance_viewed': '📉',
-        'refi-slider-interaction': '📉',
-        'likely-to-sell': '🏠', 'highly-likely-to-sell': '🏠', 'likely_to_sell': '🏠',
-        'prequal-request': '🔑', 'listings-prequal-request': '🔑',
-        'used-cashout-calculator': '💰', 'high_equity': '💰',
-        'homeowner-direct-message': '💬', 'buyer-direct-message': '💬',
-        'schedule-a-call-cta-click': '📞', 'loan-application-cta-click': '📞',
-        'listing-favorited-event': '❤️', 'viewed-should-you-sell': '🏡',
-        'view': '👁', 'homeowner-digest-email-open': '✉', 'homeowner-digest-email-click': '✉',
-        'viewed_report': '📋', 'opened_email': '✉', 'property_viewed': '🏠', 'equity_update': '📈',
-      };
-
-      return (
-        <div style={{display:'flex',flexDirection:'column',gap:'12px',maxWidth:'700px'}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-            <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Activity Feed</div>
-            <div style={{fontSize:'12px',color:'var(--text3)'}}>{displayActivity.length} recent events across all databases</div>
-          </div>
-          <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',padding:'4px 0'}}>
-            {displayActivity.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">⚡</div>
-                <div className="empty-title">No activity yet</div>
-                <div className="empty-desc">Events will appear here as your clients interact with Homebot. This populates automatically via the live webhook.</div>
-              </div>
-            ) : displayActivity.map((a, i) => {
-              const ev = a.event;
-              const cl = a.client;
-              const icon = eventIcons[ev.event_type] || '⚡';
-              const isPartner = !!cl.partner_id;
-              const partnerName = isPartner ? topPartners.find(p => p.id === cl.partner_id)?.name : null;
-              return (
-                <div key={i} className="activity-item" style={{cursor:'pointer'}} onClick={() => setQuickLook(cl)}>
-                  <div className="activity-icon" style={{background: isPartner ? 'rgba(139,92,246,0.15)' : 'var(--surface2)'}}>{icon}</div>
-                  <div className="activity-text">
-                    <div className="activity-name" style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                      {cl.name}
-                      {isPartner && <span className="badge" style={{background:'rgba(139,92,246,0.12)',color:'var(--purple)',fontSize:'9px'}}>{partnerName || cl.partner_id}</span>}
-                    </div>
-                    <div className="activity-desc">
-                      {ev.event_type.replace(/-/g,' ').replace(/_/g,' ').replace(/\w/g,c=>c.toUpperCase())}
-                      {cl.property_address ? ` · ${cl.property_address}` : ''}
-                    </div>
-                  </div>
-                  <div className="activity-time">{fmt.date(ev.occurred_at)}</div>
-                </div>
-              );
-            })}
-          </div>
         </div>
       );
     }
