@@ -320,6 +320,11 @@ function mergeClientData(client, home, loan) {
 
   equityAmount = Math.max(equityAmount || 0, 0);
   equityPercent = Math.max(equityPercent || 0, 0);
+  // Only show equity if we have a real home value — avoid false 100% readings
+  if (appraisedValue <= 0) {
+    equityAmount = 0;
+    equityPercent = 0;
+  }
 
   // Refi opportunity flags
   const CURRENT_MARKET_RATE = parseFloat(process.env.CURRENT_MARKET_RATE || "6.75");
