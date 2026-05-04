@@ -70,8 +70,23 @@ exports.handler = async (event) => {
         const client = await clientStore.get(key, { type: "json" });
         if (!client) return null;
 
-        let events = [];
-        try { events = await eventStore.get(`${key}_events`, { type: "json" }) || []; } catch {}
+        // Events can be stored two ways:
+        // 1. Directly on the client record (from backfill/webhook)
+        // 2. In a separate event store (legacy)
+        // Merge both sources, deduplicate by event_id
+        let separateEvents = [];
+        try { separateEvents = await eventStore.get(`${key}_events`, { type: "json" }) || []; } catch {}
+        
+        const clientEvents = Array.isArray(client.events) ? client.events : [];
+        const allEventsMap = new Map();
+        [...clientEvents, ...separateEvents].forEach(ev => {
+          if (ev && (ev.event_id || ev.id)) {
+            allEventsMap.set(ev.event_id || ev.id, ev);
+          }
+        });
+        const events = Array.from(allEventsMap.values())
+          .sort((a,b) => new Date(b.occurred_at) - new Date(a.occurred_at))
+          .slice(0, 50);
 
         return { ...client, events };
       } catch { return null; }

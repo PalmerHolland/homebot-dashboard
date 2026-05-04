@@ -695,11 +695,11 @@ async function generatePartnerPDF({ topPartners, getMonthStats, clients, ownStat
     : clients;
   const partnerStats = isPartnerMode ? getMonthStats(partnerId) : null;
   // Dynamically load jsPDF
-  if (!window.jsPDF) {
+  if (!window.jspdf) {
     await new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-      s.onload = resolve;
+      s.onload = () => setTimeout(resolve, 100); // small delay for init
       s.onerror = reject;
       document.head.appendChild(s);
     });
@@ -1955,8 +1955,8 @@ export default function App() {
         .sort((a,b) => b.opportunity_score - a.opportunity_score)
         .slice(0, 20);
 
-      const callToday = allPriority.filter(c => c.opportunity_score >= 85);
-      const callWeek = allPriority.filter(c => c.opportunity_score >= 70 && c.opportunity_score < 85);
+      const callToday = allPriority.filter(c => c.opportunity_score >= 70);
+      const callWeek = allPriority.filter(c => c.opportunity_score >= 40 && c.opportunity_score < 70);
 
       const ClientCallCard = ({ c, rank }) => {
         const u = urgency(c.opportunity_score);

@@ -95,7 +95,19 @@ exports.handler = async (event) => {
           const homes = await getClientHomes(client.homebot_client_id, apiToken);
           if (homes.length > 0) {
             homeData = homes[0];
-            console.log(`Home data for ${client.name}: value=${homeData.appraised_value}, equity_amt=${homeData.equity_amount}, equity_pct=${homeData.equity_percent}, balance=${homeData.outstanding_balance}`);
+            const hv = homeData.appraised_value || 0;
+            const heq = homeData.equity_amount;
+            const heqp = homeData.equity_percent;
+            const hbal = homeData.outstanding_balance;
+            console.log(`${client.name}: appraised=${hv}, equity_amt=${heq}, equity_pct=${heqp}, balance=${hbal}, addr=${homeData.property_address}`);
+            
+            // If Homebot returns no home value, skip enrichment for this client
+            // They will populate once Homebot runs their nightly AVM
+            if (hv === 0 && !heq && !hbal) {
+              console.log(`  -> No AVM data yet for ${client.name}, skipping`);
+              skipped++;
+              continue;
+            }
             try {
               const loans = await getHomeLoans(homeData.homebot_home_id, apiToken);
               // Pick first-lien purchase loan, not refi
