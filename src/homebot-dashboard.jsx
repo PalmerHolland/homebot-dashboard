@@ -1533,6 +1533,12 @@ export default function App() {
   const [enrichStatus, setEnrichStatus] = useState(null); // null | 'loading' | 'success' | 'error'
   const [enrichProgress, setEnrichProgress] = useState({ enriched: 0, total: 0, remaining: 0 });
   const [transactions, setTransactions] = useState([]);
+  const [partnerSuccess, setPartnerSuccess] = useState({ referrals: [], stats: null, loading: false });
+  const [successPartnerId, setSuccessPartnerId] = useState(null);
+  const [showReferralModal, setShowReferralModal] = useState(false);
+  const [referralModalClient, setReferralModalClient] = useState(null);
+  const [referralModalPartnerId, setReferralModalPartnerId] = useState(null);
+  const [onboardingData, setOnboardingData] = useState({});
   const [partnerSyncStatus, setPartnerSyncStatus] = useState({});
   const [showAddClient, setShowAddClient] = useState(false);
   const [showAttributeModal, setShowAttributeModal] = useState(false);
@@ -1745,6 +1751,7 @@ export default function App() {
     { icon: "⚡", label: "Activity Feed" },
     { icon: "📊", label: "Reports" },
     { icon: "🏆", label: "Report Card" },
+    { icon: "🎯", label: "Partner Success" },
     { icon: "⚙", label: "Settings" },
   ];
 
@@ -2390,6 +2397,355 @@ export default function App() {
             })}
             {callToday.length === 0 && <div style={{fontSize:'13px',color:'var(--text3)'}}>No clients in Call Today range.</div>}
           </div>
+        </div>
+      );
+    }
+
+    if (activeNav === "Partner Success") {
+      const WEBHOOK_SECRET_KEY = "PalmerHollandDashboard!@#";
+      const weekStart = (() => {
+        const now = new Date();
+        const day = now.getDay();
+        const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+        const monday = new Date(now); monday.setDate(diff);
+        return monday.toISOString().split("T")[0];
+      })();
+
+      const loadStats = async (pid) => {
+        setPartnerSuccess(p => ({...p, loading: true}));
+        try {
+          const res = await fetch("/.netlify/functions/log-referral", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET_KEY },
+            body: JSON.stringify({ action: "get_stats", partner_id: pid || undefined }),
+          });
+          const data = await res.json();
+          const res2 = await fetch("/.netlify/functions/log-referral", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET_KEY },
+            body: JSON.stringify({ action: "get_referrals", partner_id: pid || topPartners[0]?.id, include_all: true }),
+          });
+          const data2 = await res2.json();
+          setPartnerSuccess({ referrals: data2.referrals || [], stats: data.stats, loading: false });
+        } catch { setPartnerSuccess(p => ({...p, loading: false})); }
+      };
+
+      const logOutcome = async (referralId, outcome, notes, value) => {
+        await fetch("/.netlify/functions/log-referral", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET_KEY },
+          body: JSON.stringify({ action: "log_outcome", referral_id: referralId, outcome, outcome_notes: notes, outcome_value: value }),
+        });
+        loadStats(successPartnerId);
+        showToast(`Outcome logged: ${outcome}`);
+      };
+
+      const addReferral = async (client, partnerId) => {
+        await fetch("/.netlify/functions/log-referral", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-webhook-secret": WEBHOOK_SECRET_KEY },
+          body: JSON.stringify({
+            action: "add_referral",
+            partner_id: partnerId,
+            client_id: client.id,
+            client_name: client.name,
+            client_email: client.email,
+            week_of: weekStart,
+            triggers: client.triggers || [],
+            opportunity_score: client.opportunity_score || 0,
+          }),
+        });
+        loadStats(partnerId);
+        showToast(`${client.name} added to this week's referrals for ${topPartners.find(p=>p.id===partnerId)?.name}`);
+      };
+
+      // Onboarding steps
+      const ONBOARDING_STEPS = [
+        { id: "database", label: "Database Uploaded", desc: "Agent uploads their client database to Homebot", icon: "📂" },
+        { id: "email_sent", label: "Welcome Email Sent", desc: "Agent emails all clients the Homebot introduction email", icon: "✉️" },
+        { id: "digest_active", label: "First Digest Sent", desc: "Homebot sends first monthly digest to all clients", icon: "📊" },
+        { id: "first_referral", label: "First Referral Given", desc: "You give agent their first 3-5 clients to follow up with", icon: "📞" },
+      ];
+
+      const stats = partnerSuccess.stats;
+      const referrals = partnerSuccess.referrals;
+      const thisWeekReferrals = referrals.filter(r => r.week_of === weekStart && (!successPartnerId || r.partner_id === successPartnerId));
+      const thisWeekClientIds = new Set(thisWeekReferrals.map(r => r.client_id));
+
+      // Get suggested clients for this week (not already referred this week, high score)
+      const suggestedClients = clients
+        .filter(c => !successPartnerId || c.partner_id === successPartnerId)
+        .filter(c => !thisWeekClientIds.has(c.id))
+        .filter(c => {
+          // Don't suggest clients referred in last 4 weeks
+          const recentRef = referrals.find(r => r.client_id === c.id);
+          if (!recentRef) return true;
+          const weeksSince = (Date.now() - new Date(recentRef.referred_at)) / (1000*60*60*24*7);
+          return weeksSince > 4;
+        })
+        .sort((a,b) => b.opportunity_score - a.opportunity_score)
+        .slice(0, 5);
+
+      return (
+        <div style={{display:'flex',flexDirection:'column',gap:'16px',maxWidth:'900px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'8px'}}>
+            <div>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>🎯 Partner Success</div>
+              <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>Track referrals, onboarding, and wins across your partner network</div>
+            </div>
+            <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+              <select style={{background:'var(--surface2)',border:'1px solid var(--border)',borderRadius:'6px',padding:'6px 10px',color:'var(--text)',fontSize:'12px',outline:'none'}}
+                value={successPartnerId || ""}
+                onChange={e => { setSuccessPartnerId(e.target.value || null); loadStats(e.target.value || null); }}>
+                <option value="">All Partners</option>
+                {topPartners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <button className="btn btn-primary btn-sm" onClick={() => loadStats(successPartnerId)}>
+                {partnerSuccess.loading ? '⟳ Loading...' : '↻ Refresh'}
+              </button>
+            </div>
+          </div>
+
+          {/* WIN STATS */}
+          {stats && (
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px'}}>
+              {[
+                {label:'Total Referrals',value:stats.total_referrals,color:'var(--accent)',icon:'📋'},
+                {label:'Listings Generated',value:stats.listings,color:'var(--orange)',icon:'🏠'},
+                {label:'Purchases Generated',value:stats.purchases,color:'var(--green)',icon:'🔑'},
+                {label:'Referrals Out',value:stats.referral_outs,color:'var(--purple)',icon:'🤝'},
+              ].map(s => (
+                <div key={s.label} style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'10px',padding:'14px 16px',textAlign:'center'}}>
+                  <div style={{fontSize:'20px',marginBottom:'4px'}}>{s.icon}</div>
+                  <div style={{fontFamily:'Syne,sans-serif',fontWeight:'800',fontSize:'28px',color:s.color}}>{s.value}</div>
+                  <div style={{fontSize:'11px',color:'var(--text3)',marginTop:'2px'}}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* CONVERSION RATE */}
+          {stats && stats.total_referrals > 0 && (
+            <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'10px',padding:'14px 20px',display:'flex',alignItems:'center',gap:'16px'}}>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'800',fontSize:'32px',color:'var(--green)'}}>{stats.conversion_rate}%</div>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:'600',color:'var(--text)'}}>Referral-to-Win Conversion Rate</div>
+                <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>{stats.total_wins} wins from {stats.total_referrals} referrals · {stats.pending} pending outcomes</div>
+              </div>
+              <div style={{marginLeft:'auto',fontSize:'12px',color:'var(--text3)',textAlign:'right',maxWidth:'200px',lineHeight:'1.5'}}>
+                This is your proof-of-value story for recruiting new agent partners.
+              </div>
+            </div>
+          )}
+
+          {/* THIS WEEK'S REFERRALS */}
+          <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',overflow:'hidden'}}>
+            <div style={{padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid var(--border)'}}>
+              <div>
+                <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'14px'}}>
+                  This Week's Referrals
+                </div>
+                <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>
+                  Week of {new Date(weekStart).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · {thisWeekReferrals.length} clients referred
+                </div>
+              </div>
+            </div>
+
+            {thisWeekReferrals.length === 0 ? (
+              <div style={{padding:'24px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}}>
+                No referrals given this week yet. Select clients below to add them.
+              </div>
+            ) : (
+              <div>
+                {thisWeekReferrals.map(r => {
+                  const partner = topPartners.find(p => p.id === r.partner_id);
+                  const outcomeColors = { listing:'var(--orange)', purchase:'var(--green)', referral:'var(--purple)', no_response:'var(--text3)', not_ready:'var(--text3)' };
+                  const outcomeIcons = { listing:'🏠', purchase:'🔑', referral:'🤝', no_response:'❌', not_ready:'⏰' };
+                  return (
+                    <div key={r.id} style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderBottom:'1px solid var(--border)'}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:'13px',fontWeight:'600'}}>{r.client_name}</div>
+                        <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>
+                          {partner?.name || r.partner_id} · Referred {new Date(r.referred_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}
+                          {r.triggers?.length > 0 && ` · ${r.triggers[0].replace(/_/g,' ')}`}
+                        </div>
+                      </div>
+                      {r.outcome ? (
+                        <span style={{fontSize:'12px',padding:'3px 10px',borderRadius:'20px',background:`${outcomeColors[r.outcome]}18`,color:outcomeColors[r.outcome],fontWeight:'600'}}>
+                          {outcomeIcons[r.outcome]} {r.outcome.replace(/_/g,' ')}
+                        </span>
+                      ) : (
+                        <div style={{display:'flex',gap:'4px',flexWrap:'wrap',justifyContent:'flex-end'}}>
+                          {['listing','purchase','referral','no_response','not_ready'].map(o => (
+                            <button key={o} className="btn btn-ghost btn-sm"
+                              style={{fontSize:'10px',padding:'2px 6px',color: o==='listing'?'var(--orange)':o==='purchase'?'var(--green)':o==='referral'?'var(--purple)':'var(--text3)'}}
+                              onClick={() => logOutcome(r.id, o, '', null)}>
+                              {o==='listing'?'🏠':o==='purchase'?'🔑':o==='referral'?'🤝':o==='no_response'?'❌':'⏰'} {o.replace(/_/g,' ')}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* SUGGESTED CLIENTS THIS WEEK */}
+          <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',overflow:'hidden'}}>
+            <div style={{padding:'14px 16px',borderBottom:'1px solid var(--border)'}}>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'14px'}}>Suggested Clients for This Week</div>
+              <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>Top opportunities not yet referred — no overlap with previous 4 weeks</div>
+            </div>
+            {suggestedClients.length === 0 ? (
+              <div style={{padding:'20px',textAlign:'center',color:'var(--text3)',fontSize:'13px'}}>Select a partner to see suggestions</div>
+            ) : (
+              suggestedClients.map(c => {
+                const partner = topPartners.find(p => p.id === c.partner_id);
+                const u = urgency(c.opportunity_score);
+                return (
+                  <div key={c.id} style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderBottom:'1px solid var(--border)'}}>
+                    <ScoreRing score={c.opportunity_score} size={36}/>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:'13px',fontWeight:'600'}}>{c.name}</div>
+                      <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>
+                        {partner?.name || 'Your client'} · {nextAction(c)}
+                        {c.metrics?.likely_to_sell_score > 0 && ` · Sell score ${c.metrics.likely_to_sell_score}`}
+                        {c.metrics?.equity_percent > 0 && ` · ${Math.round(c.metrics.equity_percent)}% equity`}
+                      </div>
+                      {c.triggers?.length > 0 && (
+                        <div style={{display:'flex',gap:'4px',marginTop:'4px',flexWrap:'wrap'}}>
+                          {c.triggers.slice(0,3).map(t => {
+                            const tt = TRIGGER_TYPES[t];
+                            return tt ? <span key={t} style={{fontSize:'10px',padding:'1px 6px',borderRadius:'8px',background:`${tt.color}15`,color:tt.color}}>{tt.icon} {tt.label}</span> : null;
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <button className="btn btn-primary btn-sm"
+                      onClick={() => addReferral(c, c.partner_id || successPartnerId || topPartners[0]?.id)}>
+                      + Refer This Week
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* ONBOARDING CHECKLIST PER PARTNER */}
+          {topPartners.map(partner => {
+            const od = onboardingData[partner.id] || {};
+            const saveStep = async (stepId) => {
+              const updated = { ...od, [stepId]: od[stepId] ? null : new Date().toISOString() };
+              setOnboardingData(prev => ({ ...prev, [partner.id]: updated }));
+              // Save to localStorage
+              try {
+                const all = JSON.parse(localStorage.getItem('hb_onboarding') || '{}');
+                all[partner.id] = updated;
+                localStorage.setItem('hb_onboarding', JSON.stringify(all));
+              } catch {}
+            };
+
+            // Load from localStorage on first render
+            if (!od._loaded) {
+              try {
+                const all = JSON.parse(localStorage.getItem('hb_onboarding') || '{}');
+                if (all[partner.id] && !od._loaded) {
+                  setOnboardingData(prev => ({ ...prev, [partner.id]: { ...all[partner.id], _loaded: true } }));
+                }
+              } catch {}
+            }
+
+            const completedSteps = ONBOARDING_STEPS.filter(s => od[s.id]).length;
+            const progress = Math.round((completedSteps / ONBOARDING_STEPS.length) * 100);
+
+            return (
+              <div key={partner.id} style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',overflow:'hidden'}}>
+                <div style={{padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',borderBottom:'1px solid var(--border)'}}>
+                  <div className="avatar" style={{width:'36px',height:'36px',fontSize:'12px',background:'rgba(139,92,246,0.15)'}}>
+                    {partner.name.split(' ').map(n=>n[0]).join('')}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'14px'}}>{partner.name} — Onboarding</div>
+                    <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>{partner.brokerage} · {completedSteps}/{ONBOARDING_STEPS.length} steps complete</div>
+                  </div>
+                  <div style={{width:'80px'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',fontSize:'10px',color:'var(--text3)',marginBottom:'3px'}}>
+                      <span>Progress</span><span>{progress}%</span>
+                    </div>
+                    <div style={{background:'var(--surface2)',borderRadius:'4px',height:'6px'}}>
+                      <div style={{width:`${progress}%`,height:'100%',background:'var(--green)',borderRadius:'4px',transition:'width 0.3s'}}/>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  {ONBOARDING_STEPS.map((step, i) => {
+                    const done = !!od[step.id];
+                    return (
+                      <div key={step.id} style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderBottom: i<ONBOARDING_STEPS.length-1?'1px solid var(--border)':'none',opacity:done?0.7:1}}>
+                        <button onClick={() => saveStep(step.id)}
+                          style={{width:'22px',height:'22px',borderRadius:'50%',border:`2px solid ${done?'var(--green)':'var(--border)'}`,background:done?'var(--green)':'transparent',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'all 0.2s'}}>
+                          {done && <span style={{color:'white',fontSize:'12px',lineHeight:1}}>✓</span>}
+                        </button>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:'13px',fontWeight:done?'400':'600',textDecoration:done?'line-through':'none',color:done?'var(--text3)':'var(--text)'}}>
+                            {step.icon} {step.label}
+                          </div>
+                          <div style={{fontSize:'11px',color:'var(--text3)',marginTop:'2px'}}>{step.desc}</div>
+                        </div>
+                        {done && od[step.id] && (
+                          <div style={{fontSize:'11px',color:'var(--green)',flexShrink:0}}>
+                            ✓ {new Date(od[step.id]).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* FULL REFERRAL HISTORY */}
+          {referrals.length > 0 && (
+            <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px',overflow:'hidden'}}>
+              <div style={{padding:'14px 16px',borderBottom:'1px solid var(--border)'}}>
+                <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'14px'}}>Full Referral History</div>
+                <div style={{fontSize:'11.5px',color:'var(--text3)',marginTop:'2px'}}>{referrals.length} total referrals logged</div>
+              </div>
+              {referrals.slice(0,20).map(r => {
+                const partner = topPartners.find(p => p.id === r.partner_id);
+                const outcomeColors = { listing:'var(--orange)', purchase:'var(--green)', referral:'var(--purple)', no_response:'var(--text3)', not_ready:'var(--text3)' };
+                return (
+                  <div key={r.id} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 16px',borderBottom:'1px solid var(--border)',fontSize:'12px'}}>
+                    <div style={{flex:1}}>
+                      <span style={{fontWeight:'600'}}>{r.client_name}</span>
+                      <span style={{color:'var(--text3)',marginLeft:'8px'}}>{partner?.name || r.partner_id}</span>
+                    </div>
+                    <div style={{color:'var(--text3)'}}>Week of {new Date(r.week_of).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
+                    <div style={{minWidth:'80px',textAlign:'right'}}>
+                      {r.outcome ? (
+                        <span style={{color:outcomeColors[r.outcome],fontWeight:'600'}}>{r.outcome.replace(/_/g,' ')}</span>
+                      ) : (
+                        <span style={{color:'var(--text3)'}}>Pending</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {referrals.length === 0 && !partnerSuccess.loading && (
+            <div style={{textAlign:'center',padding:'40px',color:'var(--text3)'}}>
+              <div style={{fontSize:'32px',marginBottom:'12px'}}>🎯</div>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'16px',marginBottom:'8px'}}>No referrals logged yet</div>
+              <div style={{fontSize:'13px',maxWidth:'360px',margin:'0 auto',lineHeight:'1.6'}}>
+                Select a partner above and click Refresh to load their data, then use "Suggested Clients" to start logging your weekly referrals.
+              </div>
+            </div>
+          )}
         </div>
       );
     }
