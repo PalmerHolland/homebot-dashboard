@@ -1807,12 +1807,19 @@ export default function App() {
         try {
           const res = await fetch("/.netlify/functions/add-partner", {
             method: "POST",
-            headers: { "Content-Type": "application/json", "x-webhook-secret": "YOUR_SECRET" },
+            headers: { "Content-Type": "application/json", "x-webhook-secret": "PalmerHollandDashboard!@#" },
             body: JSON.stringify(addPartnerForm),
           });
           const data = await res.json();
-          setAddPartnerStatus(data.success ? "success" : "error");
-          if (data.success) { setShowAddPartner(false); setAddPartnerForm({ partner_id:"",partner_name:"",partner_email:"",partner_brokerage:"",api_token:"" }); }
+          if (data.success) {
+            setAddPartnerStatus("success");
+            setShowAddPartner(false);
+            setAddPartnerForm({ partner_id:"",partner_name:"",partner_email:"",partner_brokerage:"",api_token:"" });
+            showToast(`${addPartnerForm.partner_name} added! Now sync their clients in Postman.`);
+          } else {
+            console.error("Add partner error:", data);
+            setAddPartnerStatus("error");
+          }
         } catch { setAddPartnerStatus("error"); }
       };
 
@@ -1949,8 +1956,17 @@ export default function App() {
     }
 
     if (activeNav === "Today's Calls") {
-      // Top priority clients across ALL databases sorted by opportunity score
-      const allPriority = [...clients]
+      // Filter options: "all", "own", or a partner id
+      // callsFilter: null/"all" = everyone, "own" = your clients only, partnerId = that partner
+      const callsFilter = selectedPartner === null ? "all" : selectedPartner;
+
+      const baseClients = clients.filter(c => {
+        if (callsFilter === "all") return true;
+        if (callsFilter === "own") return !c.partner_id;
+        return c.partner_id === callsFilter;
+      });
+
+      const allPriority = [...baseClients]
         .filter(c => c.name && c.name !== "Loading...")
         .sort((a,b) => b.opportunity_score - a.opportunity_score)
         .slice(0, 20);
@@ -2028,8 +2044,29 @@ export default function App() {
       return (
         <div style={{display:'flex',flexDirection:'column',gap:'16px',maxWidth:'700px'}}>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-            <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Today's Priority Calls</div>
-            <div style={{fontSize:'12px',color:'var(--text3)'}}>Across all {clients.length} clients</div>
+            <div>
+              <div style={{fontFamily:'Syne,sans-serif',fontWeight:'700',fontSize:'18px'}}>Today's Priority Calls</div>
+              <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>
+                {callsFilter === 'all' ? `Across all ${clients.length} clients` :
+                 callsFilter === 'own' ? `Your ${baseClients.length} clients` :
+                 `${topPartners.find(p=>p.id===callsFilter)?.name || callsFilter} · ${baseClients.length} clients`}
+              </div>
+            </div>
+            {/* View selector */}
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+              {[
+                {id:'all', label:'All', icon:'🌐'},
+                {id:'own', label:'My Clients', icon:'🏠'},
+                ...topPartners.map(p => ({id:p.id, label:p.name.split(' ')[0], icon:'🤝'})),
+              ].map(opt => (
+                <button key={opt.id}
+                  onClick={() => setSelectedPartner(opt.id === 'all' ? null : opt.id === 'own' ? 'own' : opt.id)}
+                  className={`btn btn-sm ${callsFilter === opt.id || (opt.id==='all' && !selectedPartner) ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{fontSize:'12px'}}>
+                  {opt.icon} {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {callToday.length > 0 && (

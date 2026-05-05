@@ -79,11 +79,28 @@ exports.handler = async (event) => {
   const partnerName = body.partner_name || partnerId;
   const partnerEmail = body.partner_email || "";
   const partnerBrokerage = body.partner_brokerage || "";
-  const apiToken = body.api_token || process.env.HOMEBOT_API_TOKEN;
+  // Resolve token: body > env PARTNER_TOKENS > Blobs stored token > own token
+  let apiToken = body.api_token || process.env.HOMEBOT_API_TOKEN;
+  if (partnerId && !body.api_token) {
+    const envToken = JSON.parse(process.env.PARTNER_TOKENS || "{}")[partnerId];
+    if (envToken) apiToken = envToken;
+  }
 
   try {
     const clientStore = getBlobStore("clients");
     const indexStore = getBlobStore("indexes");
+
+    // If no token from env, try Blobs-stored token
+    if (partnerId && apiToken === process.env.HOMEBOT_API_TOKEN) {
+      try {
+        const tokenStore = getBlobStore("partner_tokens");
+        const stored = await tokenStore.get(`token_${partnerId}`, { type: "json" });
+        if (stored?.api_token) {
+          apiToken = stored.api_token;
+          console.log(`Using Blobs-stored token for partner ${partnerId}`);
+        }
+      } catch {}
+    }
 
     console.log(`Starting sync for ${partnerId ? `partner: ${partnerId}` : "own database"}...`);
 

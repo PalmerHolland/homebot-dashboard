@@ -90,8 +90,14 @@ exports.handler = async (event) => {
 
     await indexStore.setJSON("partner_index", partnerIndex);
 
-    // Note to user: they need to add the token to PARTNER_TOKENS env var
-    // and then call sync-clients to pull the partner's database
+    // Store the API token in Blobs so sync-clients can use it
+    // This avoids needing to manually update PARTNER_TOKENS env var
+    const tokenStore = getBlobStore("partner_tokens");
+    await tokenStore.setJSON(`token_${partner_id}`, {
+      partner_id,
+      api_token,
+      stored_at: new Date().toISOString(),
+    });
 
     return {
       statusCode: 200,
@@ -100,10 +106,10 @@ exports.handler = async (event) => {
         success: true,
         partner_id,
         partner_name: partnerIndex[partner_id].name,
-        message: `Partner ${partnerIndex[partner_id].name} registered successfully. To complete setup: 1) Add "${partner_id}":"${api_token}" to your PARTNER_TOKENS environment variable in Netlify, then 2) Call sync-clients with partner_id to pull their database.`,
+        message: `Partner ${partnerIndex[partner_id].name} registered successfully. Next step: sync their clients using Postman.`,
         next_steps: {
-          step1: `Add to Netlify env vars — PARTNER_TOKENS: {"${partner_id}": "${api_token}"}`,
-          step2: `POST /.netlify/functions/sync-clients with body: {"partner_id": "${partner_id}", "partner_name": "${partner_name}"}`,
+          step1: `Also add to Netlify env vars for reliability — PARTNER_TOKENS: {"${partner_id}": "${api_token}"}`,
+          step2: `POST /.netlify/functions/sync-clients with body: {"partner_id": "${partner_id}", "partner_name": "${partner_name}", "partner_brokerage": "${partner_brokerage || ''}"}`,
         },
       }),
     };
