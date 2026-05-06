@@ -1533,6 +1533,13 @@ export default function App() {
   const [enrichStatus, setEnrichStatus] = useState(null); // null | 'loading' | 'success' | 'error'
   const [enrichProgress, setEnrichProgress] = useState({ enriched: 0, total: 0, remaining: 0 });
   const [transactions, setTransactions] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [highlyEngaged, setHighlyEngaged] = useState([]);
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [dismissedMessages, setDismissedMessages] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('hb_dismissed_msgs') || '[]')); } catch { return new Set(); }
+  });
   const [partnerSuccess, setPartnerSuccess] = useState({ referrals: [], stats: null, loading: false });
   const [successPartnerId, setSuccessPartnerId] = useState(null);
   const [showReferralModal, setShowReferralModal] = useState(false);
@@ -1606,6 +1613,23 @@ export default function App() {
       .then(d => { if (d.transactions) setTransactions(d.transactions); })
       .catch(() => {});
   }, []);
+
+  // Load messages and highly engaged
+  const loadMessages = () => {
+    if (USE_MOCK_DATA) return;
+    setMessagesLoading(true);
+    fetch("/.netlify/functions/get-messages")
+      .then(r => r.json())
+      .then(d => {
+        if (d.messages) setMessages(d.messages);
+        if (d.highly_engaged) setHighlyEngaged(d.highly_engaged);
+        if (d.unread_count !== undefined) setUnreadMessages(d.unread_count);
+        setMessagesLoading(false);
+      })
+      .catch(() => setMessagesLoading(false));
+  };
+
+  useEffect(() => { loadMessages(); }, []);
 
   const showToast = (msg) => { setToast(msg); };
 
@@ -3222,6 +3246,132 @@ Content-Type: application/vnd.api+json
           </div>
         )}
 
+        {/* Highly Engaged + Messages Row */}
+        {isDashboard && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',flexShrink:0}}>
+
+            {/* Highly Engaged Widget */}
+            <div className="widget">
+              <div className="widget-header">
+                <span className="widget-title">🔥 Highly Engaged Clients</span>
+                <span style={{fontSize:'11px',color:'var(--text3)'}}>Most likely to transact soon</span>
+              </div>
+              <div style={{overflowY:'auto',flex:1}}>
+                {highlyEngaged.length === 0 ? (
+                  <div style={{padding:'16px',textAlign:'center',color:'var(--text3)',fontSize:'12px'}}>
+                    {messagesLoading ? 'Loading...' : 'Activity data loading — run Backfill History to populate'}
+                  </div>
+                ) : (
+                  <table style={{width:'100%',borderCollapse:'collapse'}}>
+                    <thead>
+                      <tr style={{borderBottom:'1px solid var(--border)'}}>
+                        <th style={{padding:'6px 12px',fontSize:'10px',color:'var(--text3)',textAlign:'left',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase'}}>NAME</th>
+                        <th style={{padding:'6px 12px',fontSize:'10px',color:'var(--text3)',textAlign:'right',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase'}}>ACTIVITIES</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {highlyEngaged.map((c, i) => {
+                        const partner = topPartners.find(p => p.id === c.partner_id);
+                        const clientRecord = clients.find(cl => cl.homebot_client_id === c.client_id || cl.email === c.email);
+                        return (
+                          <tr key={c.client_id || i} style={{borderBottom:'1px solid var(--border)',cursor:'pointer'}}
+                            onClick={() => clientRecord && setQuickLook(clientRecord)}>
+                            <td style={{padding:'8px 12px'}}>
+                              <div style={{fontSize:'13px',fontWeight:'500',color:'var(--accent)'}}>{c.name}</div>
+                              {partner && <div style={{fontSize:'10.5px',color:'var(--purple)',marginTop:'1px'}}>{partner.name}</div>}
+                            </td>
+                            <td style={{padding:'8px 12px',textAlign:'right',fontSize:'13px',fontWeight:'700',color:'var(--text)'}}>{c.activity_count}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              {highlyEngaged.length > 0 && (
+                <div style={{padding:'10px 12px',borderTop:'1px solid var(--border)'}}>
+                  <button className="btn btn-ghost btn-sm" style={{width:'100%',justifyContent:'center'}}
+                    onClick={() => { setActivePill("Highly Engaged"); setActiveNav("Clients"); }}>
+                    See all
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Messages Widget */}
+            <div className="widget">
+              <div className="widget-header">
+                <span className="widget-title">
+                  💬 Messages
+                  {messages.filter(m => !dismissedMessages.has(m.id)).length > 0 && (
+                    <span style={{marginLeft:'8px',padding:'1px 7px',borderRadius:'10px',background:'var(--red)',color:'white',fontSize:'10px',fontWeight:'700'}}>
+                      {messages.filter(m => !dismissedMessages.has(m.id)).length}
+                    </span>
+                  )}
+                </span>
+                <button className="btn btn-ghost btn-sm" style={{fontSize:'10px'}} onClick={loadMessages}>
+                  {messagesLoading ? '⟳' : '↻'}
+                </button>
+              </div>
+              <div style={{padding:'8px 12px',borderBottom:'1px solid var(--border)'}}>
+                <div style={{fontSize:'11.5px',color:'var(--text3)'}}>Reach out to respond, then check them off to remove from this list.</div>
+              </div>
+              <div style={{overflowY:'auto',flex:1}}>
+                {messages.filter(m => !dismissedMessages.has(m.id)).length === 0 ? (
+                  <div style={{padding:'16px',textAlign:'center',color:'var(--text3)',fontSize:'12px'}}>
+                    {messagesLoading ? 'Loading messages...' : 'No unread messages'}
+                  </div>
+                ) : (
+                  <table style={{width:'100%',borderCollapse:'collapse'}}>
+                    <thead>
+                      <tr style={{borderBottom:'1px solid var(--border)'}}>
+                        <th style={{padding:'6px 12px',fontSize:'10px',color:'var(--text3)',textAlign:'left',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase',width:'24px'}}></th>
+                        <th style={{padding:'6px 12px',fontSize:'10px',color:'var(--text3)',textAlign:'left',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase'}}>NAME</th>
+                        <th style={{padding:'6px 12px',fontSize:'10px',color:'var(--text3)',textAlign:'left',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase'}}>TIME</th>
+                        <th style={{padding:'6px 12px',fontSize:'10px',color:'var(--text3)',textAlign:'left',fontWeight:'600',letterSpacing:'1px',textTransform:'uppercase'}}>MESSAGE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {messages.filter(m => !dismissedMessages.has(m.id)).map((m, i) => {
+                        const clientRecord = clients.find(c => c.homebot_client_id === m.client_id || c.email === m.client_email);
+                        const partner = topPartners.find(p => p.id === m.partner_id);
+                        const timeSince = (() => {
+                          const diff = Date.now() - new Date(m.sent_at);
+                          const days = Math.floor(diff / 86400000);
+                          if (days === 0) return 'Today';
+                          if (days === 1) return '1 day ago';
+                          return `${days} days ago`;
+                        })();
+                        return (
+                          <tr key={m.id || i} style={{borderBottom:'1px solid var(--border)'}}>
+                            <td style={{padding:'8px 12px'}}>
+                              <input type="checkbox" style={{cursor:'pointer'}}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    const next = new Set([...dismissedMessages, m.id]);
+                                    setDismissedMessages(next);
+                                    try { localStorage.setItem('hb_dismissed_msgs', JSON.stringify([...next])); } catch {}
+                                  }
+                                }}
+                              />
+                            </td>
+                            <td style={{padding:'8px 12px',cursor:'pointer'}} onClick={() => clientRecord && setQuickLook(clientRecord)}>
+                              <div style={{fontSize:'13px',fontWeight:'500',color:'var(--accent)'}}>{m.client_name}</div>
+                              {partner && <div style={{fontSize:'10.5px',color:'var(--purple)',marginTop:'1px'}}>{partner.name}</div>}
+                            </td>
+                            <td style={{padding:'8px 12px',fontSize:'12px',color:'var(--text3)',whiteSpace:'nowrap'}}>{timeSince}</td>
+                            <td style={{padding:'8px 12px',fontSize:'12.5px',fontWeight:'500',color:'var(--text)'}}>{m.message}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="filters-row">
           <div className="search-box">
             <span style={{color:'var(--text3)',fontSize:'14px'}}>🔍</span>
@@ -3396,7 +3546,15 @@ Content-Type: application/vnd.api+json
               {!USE_MOCK_DATA && (
                 <button className="btn btn-ghost btn-sm" onClick={() => fetchClients.current()} title="Refresh now">↻</button>
               )}
-              <button className="btn btn-ghost btn-sm">🔔</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { loadMessages(); }}
+                style={{position:'relative',padding:'4px 8px'}}>
+                🔔
+                {unreadMessages > 0 && (
+                  <span style={{position:'absolute',top:'0px',right:'0px',width:'16px',height:'16px',background:'var(--red)',borderRadius:'50%',fontSize:'9px',color:'white',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',lineHeight:1}}>
+                    {unreadMessages > 9 ? '9+' : unreadMessages}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
           <div className="content">
