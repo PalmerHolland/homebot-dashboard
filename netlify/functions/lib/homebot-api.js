@@ -178,17 +178,21 @@ function normalizeClient(raw) {
 function normalizeHome(raw) {
   if (!raw) return null;
   const a = raw.attributes || {};
+  // Log ALL fields returned by Homebot for this home
+  console.log(`normalizeHome raw keys: ${JSON.stringify(Object.keys(a))}`);
+  console.log(`normalizeHome values: appraised=${a["appraised-value"]}, equity-amount=${a["equity-amount"]}, equity-percent=${a["equity-percent"]}, outstanding-balance=${a["outstanding-balance"]}, est-equity=${a["est-equity"]}, estimated-equity=${a["estimated-equity"]}, equity=${a["equity"]}`);
   return {
     homebot_home_id: raw.id,
     property_address: a["address-street"] || "",
     address_unit: a["address-unit"] || "",
     zip: a["address-zip"] || "",
-    appraised_value: parseFloat(a["appraised-value"]) || 0,
     appraised_date: a["appraised-date"] || null,
-    // Homebot provides outstanding balance directly — use this for equity
-    outstanding_balance: parseFloat(a["outstanding-balance"]) || null,
-    equity_amount: parseFloat(a["equity-amount"]) || null,
-    equity_percent: parseFloat(a["equity-percent"]) || null,
+    // Try all possible field names Homebot might use
+    equity_amount: parseFloat(a["equity-amount"] || a["est-equity"] || a["estimated-equity"] || a["equity"]) || null,
+    equity_percent: parseFloat(a["equity-percent"] || a["equity-pct"] || a["equity-percentage"]) || null,
+    outstanding_balance: parseFloat(a["outstanding-balance"] || a["current-balance"] || a["loan-balance"] || a["est-balance"] || a["estimated-balance"]) || null,
+    // Also store the appraised value under alternative names
+    appraised_value: parseFloat(a["appraised-value"] || a["estimated-value"] || a["est-value"] || a["home-value"]) || 0,
     bedrooms: parseInt(a["bedrooms"]) || 0,
     bathrooms: parseFloat(a["bathrooms"]) || 0,
     finished_sqft: parseInt(a["finished-sqft"]) || 0,
@@ -233,8 +237,10 @@ function normalizeLoan(raw) {
     fha_mi_monthly: parseFloat(a["fha-mi-monthly"]) || 0,
     escrow_monthly: parseFloat(a["escrow-monthly"]) || 0,
     total_monthly_payment: parseFloat(a["total-monthly-payment"]) || 0,
-    first_payment_due_date: a["first-payment-due-date"] || null,
-    date: a["date"] || null,
+    first_payment_due_date: a["first-payment-due-date"] || a["date"] || a["start-date"] || a["loan-date"] || null,
+    date: a["date"] || a["first-payment-due-date"] || a["start-date"] || null,
+    // Log raw fields to help debug
+    _raw_keys: Object.keys(a),
     company_loan_id: a["company-loan-id"] || null,
     lo_nmls: a["lo-nmls"] || null,
     arm_years_initial: parseInt(a["arm-years-initial"]) || 0,
@@ -296,26 +302,40 @@ function normalizeLOProfile(raw) {
 
 function mergeClientData(client, home, loan) {
   const appraisedValue = home?.appraised_value || 0;
+  // Debug log
+  if (loan) console.log(`mergeClientData for ${client?.name}: loan.amount=${loan?.amount}, loan.rate=${loan?.rate}, loan.date=${loan?.date}, loan.first_payment=${loan?.first_payment_due_date}, raw_keys=${JSON.stringify(loan?._raw_keys)}`);
 
   // Use Homebot's equity values when available — they're more accurate
   // Fall back to our amortization estimate only if Homebot doesn't provide them
   let equityAmount, equityPercent, estimatedBalance;
 
-  if (home?.equity_amount !== null && home?.equity_amount !== undefined && home?.equity_amount > 0) {
-    // Homebot provides equity directly
+  // Try to get equity from Homebot's pre-calculated values first
+  // Then fall back to our amortization formula
+  if (home?.equity_amount > 0) {
+    // Homebot provides equity amount directly — most accurate
     equityAmount = home.equity_amount;
-    equityPercent = home.equity_percent !== null ? home.equity_percent * 100 : (appraisedValue > 0 ? Math.round((equityAmount / appraisedValue) * 100) : 0);
-    estimatedBalance = home.outstanding_balance || Math.max(appraisedValue - equityAmount, 0);
-  } else if (home?.outstanding_balance !== null && home?.outstanding_balance !== undefined && home?.outstanding_balance > 0) {
-    // Homebot provides outstanding balance
+    equityPercent = home.equity_percent > 0
+      ? (home.equity_percent <= 1 ? home.equity_percent * 100 : home.equity_percent) // handle decimal vs percentage
+      : (appraisedValue > 0 ? Math.round((equityAmount / appraisedValue) * 100) : 0);
+    estimatedBalance = home.outstanding_balance > 0 ? home.outstanding_balance : Math.max(appraisedValue - equityAmount, 0);
+    console.log(`Equity from Homebot direct: amount=${equityAmount}, pct=${equityPercent}`);
+  } else if (home?.outstanding_balance > 0) {
+    // Homebot provides outstanding balance — calculate equity from it
     estimatedBalance = home.outstanding_balance;
     equityAmount = Math.max(appraisedValue - estimatedBalance, 0);
     equityPercent = appraisedValue > 0 ? Math.round((equityAmount / appraisedValue) * 100) : 0;
-  } else {
-    // Fall back to amortization estimate
-    estimatedBalance = loan ? estimateOutstandingBalance(loan) : 0;
-    equityAmount = appraisedValue - estimatedBalance;
+    console.log(`Equity from outstanding balance: balance=${estimatedBalance}, amount=${equityAmount}, pct=${equityPercent}`);
+  } else if (loan?.amount > 0 && appraisedValue > 0) {
+    // Fall back to amortization formula using loan data
+    estimatedBalance = estimateOutstandingBalance(loan);
+    equityAmount = Math.max(appraisedValue - estimatedBalance, 0);
     equityPercent = appraisedValue > 0 ? Math.round((equityAmount / appraisedValue) * 100) : 0;
+    console.log(`Equity from amortization: loan=${loan.amount}, rate=${loan.rate}, balance=${estimatedBalance}, equity=${equityAmount}, pct=${equityPercent}`);
+  } else {
+    equityAmount = 0;
+    equityPercent = 0;
+    estimatedBalance = 0;
+    console.log(`No equity data available: home.appraised=${appraisedValue}, loan.amount=${loan?.amount}`);
   }
 
   equityAmount = Math.max(equityAmount || 0, 0);
